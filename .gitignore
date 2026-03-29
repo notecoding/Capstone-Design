@@ -1,0 +1,20 @@
+가상환경
+
+venv/
+.env
+
+파이썬 캐시
+
+pycache/
+*.pyc
+
+저장소 (용량 큰 영상 및 결과물 제외)
+
+storage/uploads/*
+storage/results/*
+!storage/uploads/.gitkeep
+!storage/results/.gitkeep
+
+AI 모델 캐시
+
+.cache/
