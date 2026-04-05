@@ -1,0 +1,8 @@
+
+opencv-python-headless==4.9.0.80
+Pillow==10.3.0
+torch==2.3.0
+torchvision==0.18.0
+open-clip-torch==2.24.0
+numpy==1.26.4
+scipy==1.13.1
