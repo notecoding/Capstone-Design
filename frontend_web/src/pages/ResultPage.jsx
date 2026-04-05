@@ -1,145 +1,78 @@
-import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { analyzeService } from "../api/services";
-import Loading from "../components/Loading";
-import ErrorMessage from "../components/ErrorMessage";
+// src/pages/ResultPage.jsx
+// AI 영상 판별 결과 페이지
+//
+// 현재: 더미 데이터로 UI 확인용
+// 나중에: usePollResult 훅에서 실제 API 연동으로 교체
 
+import { useNavigate } from "react-router-dom";
+
+// ── 더미 데이터 ───────────────────────────────────────────────────
+// 실제 API 연동 시 이 부분을 usePollResult 훅으로 교체
+const DUMMY = {
+  is_ai:      true,
+  confidence: 0.82,   // 0~1 사이 값
+  analysis_details: {
+    details: "영상 내 특정 구역에서 생성형 AI 특유의 픽셀 왜곡 및 아티팩트가 감지되었습니다.",
+    detected_regions: [
+      { issue: "Pixel Artifact", x: 320, y: 240, width: 128, height: 96 },
+    ],
+  },
+};
+
+// ── 위험도 등급 계산 ──────────────────────────────────────────────
 function getVerdict(confidence) {
   if (confidence >= 0.7) return "danger";
   if (confidence >= 0.4) return "warning";
   return "safe";
 }
 
+// ── 위험도별 UI 설정 ──────────────────────────────────────────────
 const VERDICT_CONFIG = {
   danger: {
-    label: "위험 — AI 생성 가능성 높음",
-    badge: "🔴",
-    emoji: "⚠️",
-    bg: "bg-red-50",
+    label:  "위험 — AI 생성 가능성 높음",
+    badge:  "🔴",
+    emoji:  "⚠️",
+    bg:     "bg-red-50",
     border: "border-red-200",
-    text: "text-red-600",
-    bar: "bg-red-400",
+    text:   "text-red-600",
+    bar:    "bg-red-400",
   },
   warning: {
-    label: "주의 — AI 생성 가능성 있음",
-    badge: "🟡",
-    emoji: "🔍",
-    bg: "bg-yellow-50",
+    label:  "주의 — AI 생성 가능성 있음",
+    badge:  "🟡",
+    emoji:  "🔍",
+    bg:     "bg-yellow-50",
     border: "border-yellow-200",
-    text: "text-yellow-600",
-    bar: "bg-yellow-400",
+    text:   "text-yellow-600",
+    bar:    "bg-yellow-400",
   },
   safe: {
-    label: "안전 — 실제 영상일 가능성 높음",
-    badge: "🟢",
-    emoji: "✅",
-    bg: "bg-green-50",
+    label:  "안전 — 실제 영상일 가능성 높음",
+    badge:  "🟢",
+    emoji:  "✅",
+    bg:     "bg-green-50",
     border: "border-green-200",
-    text: "text-green-600",
-    bar: "bg-green-400",
+    text:   "text-green-600",
+    bar:    "bg-green-400",
   },
 };
 
 export default function ResultPage() {
   const navigate = useNavigate();
-  const { taskId } = useParams();
 
-  const [result, setResult] = useState(null);
-  const [taskStatus, setTaskStatus] = useState("pending");
-  const [message, setMessage] = useState("분석 결과를 불러오는 중입니다.");
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!taskId) {
-      setError("잘못된 접근입니다. task_id가 없습니다.");
-      return;
-    }
-
-    let intervalId = null;
-    let stopped = false;
-
-    const fetchResult = async () => {
-      try {
-        const res = await analyzeService.getResult(taskId);
-
-        if (stopped) return;
-
-        setTaskStatus(res.status);
-
-        if (res.status === "pending") {
-          setMessage(res.message || "작업 대기 중입니다.");
-          return;
-        }
-
-        if (res.status === "processing") {
-          setMessage(res.message || "AI 분석이 진행 중입니다.");
-          return;
-        }
-
-        if (res.status === "completed") {
-          setResult(res.result);
-          setMessage("분석이 완료되었습니다.");
-          if (intervalId) clearInterval(intervalId);
-          return;
-        }
-
-        if (res.status === "failed") {
-          setError(res.message || "분석에 실패했습니다.");
-          if (intervalId) clearInterval(intervalId);
-          return;
-        }
-
-        setMessage(res.message || "상태를 확인하는 중입니다.");
-      } catch (err) {
-        setError(err.response?.data?.message || "결과를 불러오지 못했습니다.");
-        if (intervalId) clearInterval(intervalId);
-      }
-    };
-
-    fetchResult();
-    intervalId = setInterval(fetchResult, 2000);
-
-    return () => {
-      stopped = true;
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [taskId]);
-
-  if (error) {
-    return (
-      <main className="max-w-2xl mx-auto px-6 py-10">
-        <ErrorMessage message={error} />
-        <button
-          onClick={() => navigate("/")}
-          className="w-full mt-4 py-3 border-2 border-gray-200 text-gray-600 text-sm font-bold rounded-xl hover:border-gray-300 hover:text-gray-800 transition-colors"
-        >
-          ← 홈으로 돌아가기
-        </button>
-      </main>
-    );
-  }
-
-  if (!result) {
-    return (
-      <main className="max-w-2xl mx-auto px-6 py-10">
-        <div className="bg-white border border-gray-200 rounded-2xl p-8 text-center">
-          <p className="text-2xl mb-3">🔎 영상 분석 중</p>
-          <p className="text-sm text-gray-500 mb-6">{message}</p>
-          <p className="text-xs text-gray-400 mb-4">현재 상태: {taskStatus}</p>
-          <Loading />
-        </div>
-      </main>
-    );
-  }
-
-  const probability = Math.round((result.confidence || 0) * 100);
-  const verdict = getVerdict(result.confidence || 0);
-  const cfg = VERDICT_CONFIG[verdict];
-  const details = result.analysis_details || {};
-  const regions = details.detected_regions || [];
+  // ── 결과 가공 ──
+  // TODO: 실제 API 연동 시 DUMMY → 실제 데이터로 교체
+  const result      = DUMMY;
+  const probability = Math.round(result.confidence * 100);
+  const verdict     = getVerdict(result.confidence);
+  const cfg         = VERDICT_CONFIG[verdict];
+  const details     = result.analysis_details;
+  const regions     = details?.detected_regions ?? [];
 
   return (
     <main className="max-w-2xl mx-auto px-6 py-10">
+
+      {/* ── 최종 판정 배너 ── */}
       <div className={`flex items-center gap-4 p-5 rounded-2xl border-2 ${cfg.bg} ${cfg.border} mb-5`}>
         <span className="text-4xl">{cfg.emoji}</span>
         <div>
@@ -148,6 +81,7 @@ export default function ResultPage() {
         </div>
       </div>
 
+      {/* ── AI 생성 확률 게이지 ── */}
       <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-4">
         <div className="flex justify-between text-sm font-bold mb-2">
           <span className="text-gray-700">AI 생성 확률</span>
@@ -165,13 +99,15 @@ export default function ResultPage() {
         </div>
       </div>
 
-      {details.details && (
+      {/* ── AI 분석 설명 ── */}
+      {details?.details && (
         <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-4">
           <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">분석 내용</p>
           <p className="text-sm text-gray-700 leading-relaxed">{details.details}</p>
         </div>
       )}
 
+      {/* ── 감지된 이상 영역 ── */}
       {regions.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-4">
           <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">감지된 이상 영역</p>
@@ -193,7 +129,9 @@ export default function ResultPage() {
         </div>
       )}
 
+      {/* ── 공유 + 피드백 ── */}
       <div className="grid grid-cols-2 gap-4 mb-4">
+        {/* 공유 */}
         <div className="bg-white border border-gray-200 rounded-2xl p-5">
           <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">결과 공유</p>
           <p className="text-xs text-gray-500 mb-3 leading-relaxed">
@@ -210,6 +148,7 @@ export default function ResultPage() {
           </button>
         </div>
 
+        {/* 피드백 */}
         <div className="bg-white border border-gray-200 rounded-2xl p-5">
           <p className="text-sm font-bold text-gray-500 uppercase tracking-wide mb-2">결과가 틀렸나요?</p>
           <p className="text-xs text-gray-500 mb-3 leading-relaxed">
@@ -224,12 +163,14 @@ export default function ResultPage() {
         </div>
       </div>
 
+      {/* ── 다시 분석 버튼 ── */}
       <button
         onClick={() => navigate("/")}
         className="w-full py-3 border-2 border-gray-200 text-gray-600 text-sm font-bold rounded-xl hover:border-gray-300 hover:text-gray-800 transition-colors"
       >
         ← 다른 영상 분석하기
       </button>
+
     </main>
   );
 }
