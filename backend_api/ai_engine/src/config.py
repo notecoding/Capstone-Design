@@ -4,30 +4,55 @@ ai_engine/src/config.py
 점수가 이상하면 여기 값을 조정하세요.
 """
 
-# 앙상블 가중치 (합 = 1.0)
+# ── 앙상블 가중치 (합 = 1.0) ──────────────────────────────────────────────
 ANALYZER_WEIGHTS = {
-    "clip":      0.55,
-    "frequency": 0.30,
-    "metadata":  0.15,
+    "clip":      0.40,   # CLIP Zero-shot
+    "frequency": 0.20,   # FFT 주파수 분석
+    "metadata":  0.10,   # 메타데이터
+    "temporal":  0.30,   # 시공간 분석 (v2 활성화)
 }
 
-# is_ai 판정 임계값
-AI_THRESHOLD = 0.45
+# ── is_ai 판정 임계값 ──────────────────────────────────────────────────────
+AI_THRESHOLD = 0.50
 
-# risk_level 기준
+# ── risk_level 기준 ────────────────────────────────────────────────────────
 RISK_THRESHOLDS = {
     "HIGH":   0.70,
     "MEDIUM": 0.45,
 }
 
-# 영상 전처리
+# ── 영상 전처리 (CLIP/FFT용 균등 프레임) ──────────────────────────────────
 VIDEO_CONFIG = {
     "max_frames":  8,
     "frame_size": (224, 224),
     "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".webm"],
 }
 
-# CLIP 설정
+# ── 시공간 분석 설정 ───────────────────────────────────────────────────────
+TEMPORAL_CONFIG = {
+    # 연속 프레임 추출 설정
+    "frames_per_segment": 16,    # 구간당 연속 프레임 수
+    "long_video_threshold": 30,  # 초 단위: 이 이상이면 2구간, 미만이면 1구간
+    "min_frames": 4,             # 최소 프레임 수 (너무 짧은 영상 대비)
+
+    # 광류 분석 지표 가중치 (합 = 1.0)
+    "flow_weights": {
+        "magnitude_inconsistency": 0.40,  # 이동량 불일치
+        "direction_inconsistency": 0.20,  # 방향 불일치
+        "frame_difference":        0.20,  # 프레임 차분
+        "texture_consistency":     0.10,  # 텍스처 일관성 (LBP)
+        "edge_consistency":        0.10,  # 엣지 일관성
+    },
+
+    # 임계값 (실제 AI/실제 영상 테스트 후 조정)
+    "magnitude_threshold":  5.0,   # 광류 이동량 표준편차 기준
+    "direction_threshold":  0.3,   # 방향 불일치 기준
+    "diff_threshold":       10.0,  # 프레임 차분 기준
+    "texture_threshold":    0.15,  # LBP 불일치 기준
+    "edge_threshold":       0.20,  # 엣지 불일치 기준
+}
+
+# ── CLIP 설정 ──────────────────────────────────────────────────────────────
 CLIP_CONFIG = {
     "model_name": "ViT-B-32",
     "pretrained": "openai",
@@ -48,7 +73,7 @@ CLIP_CONFIG = {
     ],
 }
 
-# 메타데이터 분석
+# ── 메타데이터 분석 ────────────────────────────────────────────────────────
 METADATA_CONFIG = {
     "suspicious_encoders": [
         "runway", "sora", "pika", "stable", "animatediff",
@@ -57,7 +82,7 @@ METADATA_CONFIG = {
     ],
 }
 
-# FFT 분석
+# ── FFT 분석 ───────────────────────────────────────────────────────────────
 FREQUENCY_CONFIG = {
-    "high_freq_threshold": 0.15,
+    "high_freq_threshold": 0.75,
 }
