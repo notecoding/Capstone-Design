@@ -1,9 +1,11 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from celery.result import AsyncResult
 import uuid
 import os
-from celery.result import AsyncResult
+
 from app.worker import start_ai_analysis, app as celery_app
+from app.api.analysis import router as analysis_router
 
 app = FastAPI()
 
@@ -17,6 +19,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(analysis_router)
 
 @app.post("/api/v1/analyze")
 async def create_upload_file(file: UploadFile = File(...)):
