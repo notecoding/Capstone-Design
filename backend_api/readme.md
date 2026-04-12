@@ -27,3 +27,5 @@ python -m uvicorn main:app --reload <br />
 cd C:\Users\cow25\Desktop\capstorn\frontend_web <br />
 npm install <br />
 npm run dev <br />
+
+pip install fastapi uvicorn celery redis yt-dlp open-clip-torch opencv-python pillow numpy python-multipart
