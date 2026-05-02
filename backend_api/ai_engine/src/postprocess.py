@@ -133,9 +133,9 @@ def build_result_json(
         "status":      "success",
         "is_ai":       bool(is_ai),
         "confidence":  round(final_score, 4),
-        "risk_level":  risk,           # v2 추가 — 프론트 색상/아이콘 표시용
-        "reliability": reliability,    # v2 추가 — 경계 케이스 경고용
-        "module_scores": module_scores, # v2 추가 — 프론트 근거 시각화용
+        #"risk_level":  risk,           # v2 추가 — 프론트 색상/아이콘 표시용
+        #"reliability": reliability,    # v2 추가 — 경계 케이스 경고용
+        #"module_scores": module_scores, # v2 추가 — 프론트 근거 시각화용
         "analysis_details": {
             "details":          details_str,
             "detected_regions": [],    # 미래: 얼굴/객체 영역 좌표 (현재 미사용)
