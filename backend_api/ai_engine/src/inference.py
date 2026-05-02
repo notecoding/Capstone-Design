@@ -1,14 +1,36 @@
 """
 ai_engine/src/inference.py
 
-백엔드가 호출하는 진입점입니다.
-함수명/인자명은 백엔드와의 약속이므로 변경 금지:
+백엔드가 호출하는 진입점.
+
+[함수명/인자명은 백엔드와의 약속 — 변경 금지]
   run_ai_video_analysis(video_path: str, output_dir: str)
 
-v2 변경사항:
-  - _analyze_temporal() 추가 (시공간 분석기)
-  - extract_temporal_frames() 연동
-  - config.py temporal 가중치 활성화
+[v1 → v2 변경사항]
+  CLIP 분석기:
+    - Zero-shot 텍스트 비교 방식 완전 제거
+    - DeCoF 방식으로 교체: 프레임 간 임베딩 cosine similarity 분산 측정
+    - 모델: ViT-B-32 → ViT-L-14 (정확도 향상)
+
+  반환값:
+    - risk_level 추가 (기존에 계산만 하고 반환 안 했음)
+    - reliability 추가 (경계 케이스 경고)
+    - module_scores 추가 (프론트 근거 시각화용)
+
+  구조:
+    - AnalyzerResult 표준 인터페이스 적용
+    - ANALYZERS registry 기반 분석기 실행
+    - video_type 플래그 추가 (미래 분기용 뼈대)
+    - save_evidence_frames → postprocess.py로 이동
+    - _build_description → postprocess.py로 이동
+    - _risk_level → postprocess.py로 이동
+
+[분석기 추가 방법]
+  1. config.py의 ANALYZERS 목록에 이름 추가
+  2. config.py의 ANALYZER_WEIGHTS에 가중치 추가
+  3. 이 파일에 _analyze_XXX() 함수 작성 (AnalyzerResult 반환)
+  4. ANALYZER_MAP 딕셔너리에 등록
+  → inference.py의 나머지 코드는 수정 불필요
 """
 
 import os
@@ -21,16 +43,95 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from ai_engine.src.base import AnalyzerResult
 from ai_engine.src.config import (
-    ANALYZER_WEIGHTS, AI_THRESHOLD, RISK_THRESHOLDS,
+    ANALYZERS, ANALYZER_WEIGHTS,
+    AI_THRESHOLD, RISK_THRESHOLDS,
     CLIP_CONFIG, FREQUENCY_CONFIG, METADATA_CONFIG,
     VIDEO_CONFIG, TEMPORAL_CONFIG,
 )
 from ai_engine.src.preprocess import (
     extract_frames,
     extract_temporal_frames,
-    save_evidence_frames,
 )
+from ai_engine.src.postprocess import (
+    save_evidence_frames,
+    build_result_json,
+)
+
+
+# ════════════════════════════════════════════════════════
+#  영상 타입 판별 (미래 분기용 뼈대)
+# ════════════════════════════════════════════════════════
+
+def _detect_video_type(video_path: str, frames: list[np.ndarray]) -> dict:
+    """
+    영상의 특성을 파악해서 분기 플래그를 반환합니다.
+
+    [현재 상태]
+      모든 플래그가 False로 고정되어 있습니다.
+      나중에 얼굴 감지기(RetinaFace 등)를 붙일 때 has_face를 채웁니다.
+
+    [미래에 이 플래그가 쓰이는 곳]
+      has_face = True  → rPPG 분석기 활성화 (Phase B)
+      has_face = False → 물리 일관성 분석기 활성화 (Phase C)
+      is_short  = True → temporal 분석 skip (프레임 부족)
+
+    Returns:
+        {
+          "has_face":      bool,  # 얼굴이 있는 영상인가
+          "is_short":      bool,  # 3초 미만의 짧은 영상인가
+          "is_compressed": bool,  # 심하게 재압축된 영상인가
+        }
+    """
+    return {
+        "has_face":      False,   # 나중에 RetinaFace 연결
+        "is_short":      False,   # 나중에 duration 기반으로 채움
+        "is_compressed": False,   # 나중에 품질 측정 기반으로 채움
+    }
+
+
+# ════════════════════════════════════════════════════════
+#  입력 검증
+# ════════════════════════════════════════════════════════
+
+def _validate_video(video_path: str) -> tuple[str, str]:
+    """
+    영상 파일의 기본 유효성을 검사합니다.
+
+    분석을 시작하기 전에 처리 불가능한 케이스를 걸러냅니다.
+    이렇게 하면 분석기가 빈 프레임이나 너무 짧은 영상을 받는 상황을 방지합니다.
+
+    Returns:
+        ("OK", "")           → 정상
+        ("REJECT", "이유")   → 분석 중단, error 반환
+        ("WARN", "이유")     → 분석 진행하되, reliability에 영향
+
+    현재 체크 항목:
+      - 파일 존재 여부
+      - 지원 포맷 여부
+      - 영상 길이 (너무 짧거나 너무 긺)
+    """
+    if not os.path.exists(video_path):
+        return "REJECT", f"파일 없음: {video_path}"
+
+    ext = Path(video_path).suffix.lower()
+    if ext not in VIDEO_CONFIG["supported_formats"]:
+        return "REJECT", f"지원하지 않는 형식: {ext}"
+
+    # 영상 길이 체크
+    cap      = cv2.VideoCapture(video_path)
+    fps      = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    duration = n_frames / fps if fps > 0 else 0
+
+    if duration < VIDEO_CONFIG["min_duration"]:
+        return "REJECT", f"영상이 너무 짧음 ({duration:.1f}초 — 최소 {VIDEO_CONFIG['min_duration']}초 필요)"
+    if duration > VIDEO_CONFIG["max_duration"]:
+        return "REJECT", f"영상이 너무 긺 ({duration:.0f}초 — 최대 {VIDEO_CONFIG['max_duration']}초)"
+
+    return "OK", ""
 
 
 # ════════════════════════════════════════════════════════
@@ -39,85 +140,153 @@ from ai_engine.src.preprocess import (
 
 _clip_model      = None
 _clip_preprocess = None
-_clip_tokenizer  = None
-_ai_text_feats   = None
-_real_text_feats = None
-
 
 def _load_clip():
-    global _clip_model, _clip_preprocess, _clip_tokenizer
-    global _ai_text_feats, _real_text_feats
+    """
+    CLIP 모델을 한 번만 로드하고 재사용합니다. (싱글턴 패턴)
+
+    왜 싱글턴인가:
+      CLIP ViT-L-14는 모델 크기가 약 890MB입니다.
+      요청마다 새로 로드하면 처리 시간이 수십 초씩 낭비됩니다.
+      서버 프로세스가 살아있는 동안 한 번만 로드하고 계속 씁니다.
+
+    v2 변경:
+      v1에서 텍스트 인코딩(_ai_text_feats, _real_text_feats)을 여기서 했지만
+      DeCoF 방식은 텍스트를 사용하지 않으므로 이미지 인코더만 로드합니다.
+    """
+    global _clip_model, _clip_preprocess
 
     if _clip_model is not None:
-        return
+        return  # 이미 로드됨, 재사용
 
     import open_clip
-    import torch
 
     device = CLIP_CONFIG["device"]
     _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(
-        CLIP_CONFIG["model_name"],
+        CLIP_CONFIG["model_name"],   # ViT-L-14
         pretrained=CLIP_CONFIG["pretrained"],
         device=device,
     )
-    _clip_tokenizer = open_clip.get_tokenizer(CLIP_CONFIG["model_name"])
-    _clip_model.eval()
-
-    def encode_texts(texts):
-        tokens = _clip_tokenizer(texts).to(device)
-        with torch.no_grad():
-            feats = _clip_model.encode_text(tokens)
-            feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats
-
-    _ai_text_feats   = encode_texts(CLIP_CONFIG["ai_prompts"])
-    _real_text_feats = encode_texts(CLIP_CONFIG["real_prompts"])
+    _clip_model.eval()  # 추론 모드 고정 (드롭아웃 비활성화)
 
 
 # ════════════════════════════════════════════════════════
-#  분석기 1: CLIP
+#  분석기 1: CLIP (DeCoF 방식)
 # ════════════════════════════════════════════════════════
 
-def _analyze_clip(frames: list[np.ndarray]) -> tuple[float, str, list[float]]:
+def _analyze_clip(frames: list[np.ndarray], **kwargs) -> AnalyzerResult:
+    """
+    DeCoF 방식: 프레임 간 임베딩 불일치를 측정합니다.
+
+    [핵심 원리 — v1과 완전히 다른 방식]
+      v1 (잘못된 방식):
+        각 프레임과 "an AI generated video" 텍스트의 유사도를 측정.
+        → CLIP은 이 판단을 할 수 있는 모델이 아님.
+
+      v2 (DeCoF 방식):
+        인접 프레임 사이의 cosine similarity를 측정.
+        → 실제 영상: 연속 프레임이 자연스럽게 이어짐 → similarity 높음
+        → AI 영상: 프레임마다 미세하게 달라짐 → similarity 낮음
+
+    [왜 이게 AI를 잡는가]
+      AI 생성 모델은 각 프레임을 독립적으로 또는 짧은 윈도우로 생성합니다.
+      완전히 연속적인 맥락을 유지하지 못하기 때문에
+      프레임 간에 미세한 임베딩 불일치가 발생합니다.
+      이것이 DeCoF 논문(2024)이 발견한 핵심 신호입니다.
+
+    Args:
+        frames: preprocess.extract_frames()로 추출한 프레임 리스트
+
+    Returns:
+        AnalyzerResult
+          score : 1 - 평균_유사도 (불일치할수록 높음 = AI 의심)
+          detail: 프레임별 유사도 목록, 평균, 표준편차
+    """
     import torch
 
     _load_clip()
     device = CLIP_CONFIG["device"]
-    frame_scores = []
 
+    # 각 프레임을 CLIP 이미지 임베딩으로 변환
+    frame_feats = []
     for frame in frames:
-        rgb     = frame[:, :, ::-1]
+        rgb     = frame[:, :, ::-1]          # BGR → RGB (CLIP은 RGB 입력)
         pil_img = Image.fromarray(rgb.astype(np.uint8))
         tensor  = _clip_preprocess(pil_img).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            img_feat = _clip_model.encode_image(tensor)
-            img_feat = img_feat / img_feat.norm(dim=-1, keepdim=True)
+            feat = _clip_model.encode_image(tensor)
+            feat = feat / feat.norm(dim=-1, keepdim=True)  # L2 정규화
+        frame_feats.append(feat)
 
-        ai_sim   = (img_feat @ _ai_text_feats.T).mean().item()
-        real_sim = (img_feat @ _real_text_feats.T).mean().item()
+    if len(frame_feats) < 2:
+        return AnalyzerResult(
+            score=0.5, status="skip",
+            reason="CLIP: 프레임 수 부족 (2개 미만)",
+        )
 
-        logits = torch.tensor([ai_sim, real_sim]) * 100.0
-        probs  = torch.softmax(logits, dim=0)
-        frame_scores.append(float(probs[0]))
+    # 인접 프레임 간 cosine similarity 계산
+    # feat이 이미 L2 정규화되어 있으므로 내적 = cosine similarity
+    similarities = []
+    for i in range(len(frame_feats) - 1):
+        sim = (frame_feats[i] @ frame_feats[i+1].T).item()
+        similarities.append(sim)
 
-    avg    = float(np.mean(frame_scores))
-    std    = float(np.std(frame_scores))
-    reason = f"CLIP: 평균 {avg:.2%}, 표준편차 {std:.3f} (프레임 {len(frames)}개)"
-    return avg, reason, frame_scores
+    avg_sim = float(np.mean(similarities))
+    std_sim = float(np.std(similarities))
+
+    # 점수 계산: 불일치할수록(similarity 낮을수록) AI 의심 → 점수 높게
+    # avg_sim이 1.0이면 완전히 동일(실제 영상), 0.0이면 완전히 다름(AI 의심)
+    score = float(np.clip(1.0 - avg_sim, 0.0, 1.0))
+
+    return AnalyzerResult(
+        score=score,
+        status="ok",
+        reason=f"CLIP: 프레임 간 평균 유사도 {avg_sim:.3f} (낮을수록 AI 의심)",
+        detail={
+            "avg_similarity":    avg_sim,
+            "std_similarity":    std_sim,
+            "similarities":      similarities,  # 프레임별 상세 (디버깅용)
+            "n_frames_analyzed": len(frame_feats),
+        },
+    )
 
 
 # ════════════════════════════════════════════════════════
 #  분석기 2: FFT 주파수 분석
 # ════════════════════════════════════════════════════════
 
-def _analyze_frequency(frames: list[np.ndarray]) -> tuple[float, str]:
+def _analyze_frequency(frames: list[np.ndarray], **kwargs) -> AnalyzerResult:
+    """
+    주파수 도메인에서 AI 생성 흔적을 탐지합니다.
+
+    [원리]
+      이미지를 FFT(고속 푸리에 변환)로 주파수 도메인으로 변환하면
+      GAN이나 Diffusion 모델이 생성한 이미지에서 특유의 패턴이 나타납니다.
+        - 고주파 비율: AI 생성은 자연 이미지와 다른 고주파 분포를 가짐
+        - 방사 분산: 주파수 에너지가 방사 방향으로 균일하지 않음
+        - 방향 비대칭: 수평/수직 주파수 에너지의 불균형
+
+    [현재 한계]
+      스코어 계산이 아직 데이터 기반이 아닙니다.
+      validate_thresholds.py 실행 후 high_freq_threshold를 수정해야
+      신뢰할 수 있는 점수가 나옵니다.
+
+    Args:
+        frames: preprocess.extract_frames()로 추출한 프레임 리스트
+
+    Returns:
+        AnalyzerResult
+          detail: 고주파비율, 방사분산, 방향비대칭 수치
+    """
     threshold = FREQUENCY_CONFIG["high_freq_threshold"]
     all_hf, all_rv, all_da = [], [], []
 
     for frame in frames:
+        # BGR → 그레이스케일 (주파수 분석은 단채널로 충분)
         gray      = np.mean(frame, axis=2)
         fft_shift = np.fft.fftshift(np.fft.fft2(gray))
+        # log 스케일로 변환 (큰 값과 작은 값의 범위를 좁힘)
         mag       = np.log1p(np.abs(fft_shift))
         h, w      = mag.shape
         cx, cy    = w // 2, h // 2
@@ -125,10 +294,13 @@ def _analyze_frequency(frames: list[np.ndarray]) -> tuple[float, str]:
         y_idx, x_idx = np.ogrid[:h, :w]
         dist = np.sqrt((x_idx - cx) ** 2 + (y_idx - cy) ** 2)
         r    = min(h, w) // 4
-        lo   = mag[dist <= r].sum()
-        hi   = mag[dist >  r].sum()
+
+        # 고주파 비율: 전체 에너지 중 외곽(고주파) 영역의 비율
+        lo = mag[dist <= r].sum()
+        hi = mag[dist >  r].sum()
         all_hf.append(hi / (lo + hi + 1e-8))
 
+        # 방사 분산: 거리별 평균 에너지의 분산 (균일하지 않을수록 이상)
         profile = []
         for rr in range(1, min(cx, cy)):
             mask = (dist >= rr - 0.5) & (dist < rr + 0.5)
@@ -137,6 +309,7 @@ def _analyze_frequency(frames: list[np.ndarray]) -> tuple[float, str]:
         arr = np.array(profile)
         all_rv.append(float(np.var(arr) / (np.mean(arr) + 1e-8)))
 
+        # 방향 비대칭: 수평/수직 에너지 불균형
         he = mag[cy - 2:cy + 2, :].sum()
         ve = mag[:, cx - 2:cx + 2].sum()
         all_da.append(abs(he - ve) / (he + ve + 1e-8))
@@ -145,24 +318,56 @@ def _analyze_frequency(frames: list[np.ndarray]) -> tuple[float, str]:
     avg_rv = float(np.mean(all_rv))
     avg_da = float(np.mean(all_da))
 
+    # !! 이 스코어 계산은 임시 방식 !!
+    # validate_thresholds.py로 실제 분포를 측정한 후 교체 필요
     hf_score = max(0.0, min(1.0, 1.0 - abs(avg_hf - threshold) / threshold))
     rv_score = min(1.0, avg_rv / 5.0)
     da_score = min(1.0, avg_da * 3.0)
     score    = hf_score * 0.4 + rv_score * 0.4 + da_score * 0.2
 
-    reason = (
-        f"FFT: 고주파비={avg_hf:.3f}, "
-        f"방사분산={avg_rv:.3f}, "
-        f"방향비대칭={avg_da:.3f}"
+    return AnalyzerResult(
+        score=float(score),
+        status="ok",
+        reason=f"FFT: 고주파비={avg_hf:.3f}, 방사분산={avg_rv:.3f}, 방향비대칭={avg_da:.3f}",
+        detail={
+            "high_freq_ratio":    avg_hf,
+            "radial_variance":    avg_rv,
+            "directional_asymm":  avg_da,
+        },
     )
-    return float(score), reason
 
 
 # ════════════════════════════════════════════════════════
 #  분석기 3: 메타데이터
 # ════════════════════════════════════════════════════════
 
-def _analyze_metadata(video_path: str) -> tuple[float, str, list[dict]]:
+def _analyze_metadata(video_path: str, **kwargs) -> AnalyzerResult:
+    """
+    영상 파일의 메타데이터에서 AI 생성 흔적을 탐지합니다.
+
+    [원리]
+      영상 파일 안에는 인코더 이름, 해상도, C2PA 마커 등이 저장됩니다.
+      AI 생성 도구들은 특유의 인코더 이름을 남기거나,
+      모델 출력 해상도(512x512 등)를 그대로 유지하는 경우가 많습니다.
+
+    [탐지 항목]
+      1. 의심 인코더 키워드 (runway, sora, kling 등)
+      2. C2PA 마커 (AI 생성 콘텐츠 표준 메타데이터)
+      3. AI 생성 모델 표준 출력 해상도
+
+    [강점과 한계]
+      강점: ffprobe만 쓰므로 매우 빠름 (~0.1초)
+      한계: 메타데이터를 지운 영상에는 무력.
+            재압축하거나 SNS에서 다운받은 영상은 메타데이터가 지워질 수 있음.
+
+    Args:
+        video_path: 분석할 영상 파일 경로
+
+    Returns:
+        AnalyzerResult
+          score : 탐지된 항목 수에 따라 0.2~0.95
+          detail: 탐지된 메타데이터 항목 목록
+    """
     try:
         result = subprocess.run(
             [
@@ -175,187 +380,170 @@ def _analyze_metadata(video_path: str) -> tuple[float, str, list[dict]]:
             timeout=30, encoding="utf-8", errors="ignore",
         )
         data = json.loads(result.stdout) if result.returncode == 0 else {}
-    except Exception:
-        return 0.5, "ffprobe 실패", []
+    except Exception as e:
+        return AnalyzerResult(
+            score=0.5, status="error",
+            reason=f"ffprobe 실패: {e}",
+        )
 
     if not data:
-        return 0.5, "메타데이터 없음", []
+        return AnalyzerResult(
+            score=0.5, status="skip",
+            reason="메타데이터 없음",
+        )
 
     fmt     = data.get("format", {})
     streams = data.get("streams", [])
     tags    = fmt.get("tags", {})
 
     components = []
-    reasons    = []
+    found_items = []
 
-    # 1. 인코더 이름
+    # 체크 1: 의심 인코더 키워드
     encoder_str = " ".join([
         tags.get("encoder",     ""),
         tags.get("comment",     ""),
         tags.get("description", ""),
         fmt.get("format_long_name", ""),
     ]).lower()
-
-    found = [kw for kw in METADATA_CONFIG["suspicious_encoders"] if kw in encoder_str]
-    if found:
+    found_kw = [kw for kw in METADATA_CONFIG["suspicious_encoders"] if kw in encoder_str]
+    if found_kw:
         components.append(0.95)
-        reasons.append(f"의심 인코더: {found}")
+        found_items.append(f"의심 인코더: {found_kw}")
     else:
         components.append(0.20)
 
-    # 2. C2PA
+    # 체크 2: C2PA 마커 (AI 생성 콘텐츠 국제 표준)
     if any("c2pa" in str(v).lower() for v in tags.values()):
         components.append(0.90)
-        reasons.append("C2PA AI 생성 마커 감지")
+        found_items.append("C2PA AI 생성 마커 감지")
     else:
         components.append(0.25)
 
-    # 3. AI 전형 해상도
+    # 체크 3: AI 생성 모델 표준 출력 해상도
     video_streams = [s for s in streams if s.get("codec_type") == "video"]
     if video_streams:
-        w, h = video_streams[0].get("width", 0), video_streams[0].get("height", 0)
-        unusual_ai_res = {(512, 512), (768, 512), (512, 768), (1024, 576), (576, 1024)}
-        if (w, h) in unusual_ai_res:
+        w = video_streams[0].get("width", 0)
+        h = video_streams[0].get("height", 0)
+        if (w, h) in METADATA_CONFIG["ai_resolutions"]:
             components.append(0.75)
-            reasons.append(f"AI 전형 해상도: {w}x{h}")
+            found_items.append(f"AI 전형 해상도: {w}x{h}")
         else:
             components.append(0.20)
 
     score  = float(np.mean(components)) if components else 0.5
-    reason = " | ".join(reasons) if reasons else "메타데이터 이상 없음"
-    return score, reason, []
+    reason = " | ".join(found_items) if found_items else "메타데이터 이상 없음"
+
+    return AnalyzerResult(
+        score=score,
+        status="ok",
+        reason=reason,
+        detail={"found_items": found_items},
+    )
 
 
 # ════════════════════════════════════════════════════════
-#  분석기 4: 시공간 분석 (v2 신규)
+#  분석기 4: 시공간 분석
 # ════════════════════════════════════════════════════════
 
 def _compute_optical_flow(f1: np.ndarray, f2: np.ndarray) -> np.ndarray:
-    """두 프레임 사이의 광류(Optical Flow)를 계산합니다."""
-    g1   = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
-    g2   = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
-    flow = cv2.calcOpticalFlowFarneback(
+    """
+    두 연속 프레임 사이의 광류(Optical Flow)를 계산합니다.
+
+    광류란 프레임 간 각 픽셀의 이동 방향과 속도를 나타내는 벡터 필드입니다.
+    Farneback 알고리즘은 전체 영역의 밀집 광류를 계산합니다.
+
+    Returns:
+        flow: shape (H, W, 2) — 각 픽셀의 (x방향, y방향) 이동량
+    """
+    g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+    g2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+    return cv2.calcOpticalFlowFarneback(
         g1, g2, None,
-        pyr_scale=0.5,
-        levels=3,
-        winsize=15,
-        iterations=3,
-        poly_n=5,
-        poly_sigma=1.2,
+        pyr_scale=0.5,   # 피라미드 스케일
+        levels=3,        # 피라미드 레벨 수
+        winsize=15,      # 윈도우 크기
+        iterations=3,    # 반복 횟수
+        poly_n=5,        # 다항식 이웃 크기
+        poly_sigma=1.2,  # 가우시안 표준편차
         flags=0,
     )
-    return flow  # shape: (H, W, 2) — (x방향, y방향)
 
 
 def _score_magnitude_inconsistency(flows: list[np.ndarray]) -> float:
     """
     지표 1: 광류 이동량 불일치
-    AI 영상은 프레임 간 이동량이 갑자기 튀는 경우가 많음.
+    AI 영상은 프레임 간 이동량이 갑자기 튀는 경우가 많습니다.
     이동량의 표준편차가 클수록 AI 의심.
     """
-    mags = []
-    for flow in flows:
-        mag = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
-        mags.append(mag.mean())
-
+    mags = [np.sqrt(f[..., 0]**2 + f[..., 1]**2).mean() for f in flows]
     if len(mags) < 2:
         return 0.5
-
-    std   = float(np.std(mags))
-    threshold = TEMPORAL_CONFIG["magnitude_threshold"]
-    score = min(1.0, std / threshold)
-    return score
+    return float(min(1.0, np.std(mags) / TEMPORAL_CONFIG["magnitude_threshold"]))
 
 
 def _score_direction_inconsistency(flows: list[np.ndarray]) -> float:
     """
     지표 2: 광류 방향 불일치
-    AI 영상은 움직임 방향이 프레임마다 갑자기 바뀌는 경우가 있음.
-    연속 프레임 간 방향 변화량의 평균이 클수록 AI 의심.
+    AI 영상은 움직임 방향이 프레임마다 갑자기 바뀌는 경우가 있습니다.
     """
-    angles = []
-    for flow in flows:
-        angle = np.arctan2(flow[..., 1], flow[..., 0])
-        angles.append(angle.mean())
-
+    angles = [np.arctan2(f[..., 1], f[..., 0]).mean() for f in flows]
     if len(angles) < 2:
         return 0.5
-
-    diffs = [abs(angles[i+1] - angles[i]) for i in range(len(angles) - 1)]
-    avg_diff  = float(np.mean(diffs))
-    threshold = TEMPORAL_CONFIG["direction_threshold"]
-    score     = min(1.0, avg_diff / (threshold * np.pi))
-    return score
+    diffs    = [abs(angles[i+1] - angles[i]) for i in range(len(angles)-1)]
+    avg_diff = float(np.mean(diffs))
+    return float(min(1.0, avg_diff / (TEMPORAL_CONFIG["direction_threshold"] * np.pi)))
 
 
 def _score_frame_difference(frames: list[np.ndarray]) -> float:
     """
     지표 3: 프레임 차분
-    AI 영상은 배경이 미묘하게 변하는 패턴이 있음.
-    인접 프레임의 픽셀 차이 평균이 불규칙할수록 AI 의심.
+    AI 영상은 배경이 미묘하게 변하는 패턴이 있습니다.
+    인접 프레임의 픽셀 차이 편차가 클수록 AI 의심.
     """
-    diffs = []
-    for i in range(len(frames) - 1):
-        diff = np.abs(
-            frames[i].astype(float) - frames[i+1].astype(float)
-        ).mean()
-        diffs.append(diff)
-
+    diffs = [
+        np.abs(frames[i].astype(float) - frames[i+1].astype(float)).mean()
+        for i in range(len(frames)-1)
+    ]
     if not diffs:
         return 0.5
-
-    std       = float(np.std(diffs))
-    threshold = TEMPORAL_CONFIG["diff_threshold"]
-    score     = min(1.0, std / threshold)
-    return score
+    return float(min(1.0, np.std(diffs) / TEMPORAL_CONFIG["diff_threshold"]))
 
 
 def _score_texture_consistency(frames: list[np.ndarray]) -> float:
     """
     지표 4: 텍스처 일관성 (LBP 기반)
-    AI 영상은 머리카락, 손가락 같은 세밀한 텍스처가
-    프레임마다 달라지는 경향이 있음.
-    LBP 히스토그램의 프레임 간 차이가 클수록 AI 의심.
+    AI 영상은 머리카락, 손가락 같은 세밀한 텍스처가 프레임마다 달라집니다.
+    LBP(Local Binary Pattern) 히스토그램의 프레임 간 차이가 클수록 AI 의심.
+
+    LBP란: 각 픽셀 주변의 밝기 패턴을 이진수로 인코딩한 텍스처 기술자.
     """
     def lbp_histogram(frame: np.ndarray) -> np.ndarray:
-        gray   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        radius = 1
+        gray     = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         n_points = 8
-
-        lbp = np.zeros_like(gray, dtype=np.uint8)
+        lbp      = np.zeros_like(gray, dtype=np.uint8)
         for i in range(n_points):
-            angle = 2 * np.pi * i / n_points
-            dx    = int(round(radius * np.cos(angle)))
-            dy    = int(round(radius * np.sin(angle)))
-
+            angle   = 2 * np.pi * i / n_points
+            dx, dy  = int(round(np.cos(angle))), int(round(np.sin(angle)))
             shifted = np.roll(np.roll(gray, dy, axis=0), dx, axis=1)
             lbp    += (shifted >= gray).astype(np.uint8) * (2 ** i)
-
-        hist, _ = np.histogram(lbp.ravel(), bins=256, range=(0, 256))
-        hist    = hist.astype(float)
-        hist   /= (hist.sum() + 1e-8)
+        hist, _  = np.histogram(lbp.ravel(), bins=256, range=(0, 256))
+        hist     = hist.astype(float)
+        hist    /= (hist.sum() + 1e-8)
         return hist
 
     hists = [lbp_histogram(f) for f in frames]
-    diffs = []
-    for i in range(len(hists) - 1):
-        diff = np.abs(hists[i] - hists[i+1]).sum()
-        diffs.append(diff)
-
+    diffs = [np.abs(hists[i] - hists[i+1]).sum() for i in range(len(hists)-1)]
     if not diffs:
         return 0.5
-
-    avg_diff  = float(np.mean(diffs))
-    threshold = TEMPORAL_CONFIG["texture_threshold"]
-    score     = min(1.0, avg_diff / threshold)
-    return score
+    return float(min(1.0, np.mean(diffs) / TEMPORAL_CONFIG["texture_threshold"]))
 
 
 def _score_edge_consistency(frames: list[np.ndarray]) -> float:
     """
     지표 5: 엣지 일관성
-    AI 영상은 물체 경계선이 프레임마다 흔들리는 경향이 있음.
-    엣지 맵의 프레임 간 차이가 클수록 AI 의심.
+    AI 영상은 물체 경계선이 프레임마다 흔들리는 경향이 있습니다.
+    Canny 엣지 맵의 프레임 간 차이 편차가 클수록 AI 의심.
     """
     def edge_map(frame: np.ndarray) -> np.ndarray:
         gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -363,57 +551,53 @@ def _score_edge_consistency(frames: list[np.ndarray]) -> float:
         return edges.astype(float) / 255.0
 
     edges = [edge_map(f) for f in frames]
-    diffs = []
-    for i in range(len(edges) - 1):
-        diff = np.abs(edges[i] - edges[i+1]).mean()
-        diffs.append(diff)
-
+    diffs = [np.abs(edges[i] - edges[i+1]).mean() for i in range(len(edges)-1)]
     if not diffs:
         return 0.5
-
-    std       = float(np.std(diffs))
-    threshold = TEMPORAL_CONFIG["edge_threshold"]
-    score     = min(1.0, std / threshold)
-    return score
+    return float(min(1.0, np.std(diffs) / TEMPORAL_CONFIG["edge_threshold"]))
 
 
-def _analyze_temporal(segments: list[list[np.ndarray]]) -> tuple[float, str]:
+def _analyze_temporal(segments: list[list[np.ndarray]], **kwargs) -> AnalyzerResult:
     """
     시공간 분석기 메인 함수.
-    구간별 프레임들을 받아서 5가지 지표를 계산하고 가중 평균을 냄.
+
+    [원리]
+      연속 프레임들 사이의 광류를 계산하고 5가지 불일치 지표를 측정합니다.
+      AI 영상은 시간 축에서 자연스럽지 못한 패턴이 남기 때문에
+      이 5가지 지표의 가중 평균이 높으면 AI 의심입니다.
+
+    [구간 평균을 쓰는 이유]
+      영상의 특정 구간만 AI처럼 보일 수 있습니다.
+      여러 구간의 평균을 내면 더 안정적인 판단이 가능합니다.
 
     Args:
         segments: extract_temporal_frames()의 반환값
                   [[구간1 프레임들], [구간2 프레임들], ...]
-
-    Returns:
-        score : 0~1 (높을수록 AI 의심)
-        reason: 판단 근거 문자열
     """
     if not segments:
-        return 0.5, "시공간: 분석할 프레임 없음"
+        return AnalyzerResult(
+            score=0.5, status="skip",
+            reason="시공간: 분석할 프레임 없음",
+        )
 
-    w = TEMPORAL_CONFIG["flow_weights"]
+    w          = TEMPORAL_CONFIG["flow_weights"]
     seg_scores = []
 
     for seg_frames in segments:
         if len(seg_frames) < 2:
             continue
 
-        # 광류 계산 (인접 프레임 쌍마다)
         flows = [
             _compute_optical_flow(seg_frames[i], seg_frames[i+1])
             for i in range(len(seg_frames) - 1)
         ]
 
-        # 5가지 지표 계산
         s_mag  = _score_magnitude_inconsistency(flows)
         s_dir  = _score_direction_inconsistency(flows)
         s_diff = _score_frame_difference(seg_frames)
         s_tex  = _score_texture_consistency(seg_frames)
         s_edge = _score_edge_consistency(seg_frames)
 
-        # 가중 평균
         seg_score = (
             s_mag  * w["magnitude_inconsistency"] +
             s_dir  * w["direction_inconsistency"] +
@@ -423,69 +607,75 @@ def _analyze_temporal(segments: list[list[np.ndarray]]) -> tuple[float, str]:
         )
         seg_scores.append({
             "score": seg_score,
-            "mag":   s_mag,
-            "dir":   s_dir,
-            "diff":  s_diff,
-            "tex":   s_tex,
-            "edge":  s_edge,
+            "mag": s_mag, "dir": s_dir,
+            "diff": s_diff, "tex": s_tex, "edge": s_edge,
         })
 
     if not seg_scores:
-        return 0.5, "시공간: 유효한 구간 없음"
+        return AnalyzerResult(
+            score=0.5, status="skip",
+            reason="시공간: 유효한 구간 없음",
+        )
 
     final_score = float(np.mean([s["score"] for s in seg_scores]))
+    best        = max(seg_scores, key=lambda x: x["score"])
 
-    # 대표 구간(점수 높은 구간) 기준으로 reason 생성
-    best = max(seg_scores, key=lambda x: x["score"])
-    reason = (
-        f"시공간: 이동불일치={best['mag']:.3f}, "
-        f"방향불일치={best['dir']:.3f}, "
-        f"프레임차분={best['diff']:.3f}, "
-        f"텍스처={best['tex']:.3f}, "
-        f"엣지={best['edge']:.3f} "
-        f"(구간 {len(seg_scores)}개 평균)"
+    return AnalyzerResult(
+        score=final_score,
+        status="ok",
+        reason=(
+            f"시공간: 이동불일치={best['mag']:.3f}, 방향불일치={best['dir']:.3f}, "
+            f"프레임차분={best['diff']:.3f}, 텍스처={best['tex']:.3f}, 엣지={best['edge']:.3f} "
+            f"(구간 {len(seg_scores)}개 평균)"
+        ),
+        detail={"segments": seg_scores},
     )
-    return final_score, reason
+
+
+# ════════════════════════════════════════════════════════
+#  분석기 Registry
+# ════════════════════════════════════════════════════════
+
+# 새 분석기를 추가할 때 여기에만 등록하면 됩니다.
+# config.py의 ANALYZERS에 이름을 추가하는 것도 잊지 마세요.
+ANALYZER_MAP = {
+    "clip":      _analyze_clip,
+    "frequency": _analyze_frequency,
+    "metadata":  _analyze_metadata,
+    "temporal":  _analyze_temporal,
+    # "rppg":      _analyze_rppg,       # Phase B 추가 시
+    # "physics":   _analyze_physics,    # Phase C 추가 시
+    # "cnn_detect": _analyze_cnn,       # Phase A 추가 시
+}
 
 
 # ════════════════════════════════════════════════════════
 #  앙상블
 # ════════════════════════════════════════════════════════
 
-def _ensemble(scores: dict[str, float]) -> float:
+def _ensemble(results: dict[str, AnalyzerResult]) -> float:
+    """
+    각 분석기의 결과를 가중 평균으로 합산합니다.
+
+    status가 "error" 또는 "skip"인 모듈은 앙상블에서 제외됩니다.
+    제외된 모듈의 가중치는 남은 모듈에 비례 배분됩니다.
+
+    예: clip이 error면 clip 0.45가 나머지 3개에 비례해서 재분배됨.
+    """
     weighted_sum = 0.0
     total_weight = 0.0
-    for name, weight in ANALYZER_WEIGHTS.items():
-        s = scores.get(name)
-        if s is not None and weight > 0:
-            weighted_sum += s * weight
-            total_weight += weight
+
+    for name, result in results.items():
+        if result.status != "ok":
+            continue  # error / skip 모듈 제외
+        weight = ANALYZER_WEIGHTS.get(name, 0.0)
+        weighted_sum += result.score * weight
+        total_weight += weight
+
     if total_weight == 0:
-        return 0.5
+        return 0.5  # 모든 모듈 실패 시 중립값 반환
+
     return float(np.clip(weighted_sum / total_weight, 0.0, 1.0))
-
-
-def _risk_level(score: float) -> str:
-    if score >= RISK_THRESHOLDS["HIGH"]:
-        return "HIGH"
-    elif score >= RISK_THRESHOLDS["MEDIUM"]:
-        return "MEDIUM"
-    return "LOW"
-
-
-def _build_description(score: float, reasons: dict[str, str]) -> str:
-    level = _risk_level(score)
-    base  = {
-        "HIGH":   "AI 생성 영상으로 판별되었습니다.",
-        "MEDIUM": "AI 생성 가능성이 있으나 확실하지 않습니다.",
-        "LOW":    "실제 촬영 영상으로 판별되었습니다.",
-    }[level]
-
-    details = [
-        r for r in reasons.values()
-        if r and "없음" not in r and "실패" not in r and "오류" not in r
-    ]
-    return base + (" 근거: " + " / ".join(details) if details else "")
 
 
 # ════════════════════════════════════════════════════════
@@ -494,90 +684,103 @@ def _build_description(score: float, reasons: dict[str, str]) -> str:
 
 def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
     """
-    [백엔드 호출용 핵심 함수 - 이름/인자 변경 금지]
+    [백엔드 호출용 핵심 함수 — 이름/인자 변경 금지]
+
+    전체 파이프라인을 순서대로 실행하고 결과를 반환합니다.
+
+    실행 순서:
+      0. 입력 검증 (형식/길이 확인)
+      1. 프레임 추출 (균등 + 연속)
+      2. 영상 타입 판별 (미래 분기용)
+      3. 분석기 실행 (ANALYZERS 목록 기반)
+      4. 앙상블 (가중 평균)
+      5. 증거 프레임 저장
+      6. 결과 JSON 조립 및 반환
 
     Args:
         video_path : 분석할 영상의 절대 경로
-        output_dir : 결과 이미지를 저장할 폴더 경로
+        output_dir : 증거 프레임을 저장할 폴더 경로
 
     Returns:
-        성공: {"status": "success", "is_ai": bool, "confidence": float,
-               "analysis_details": {...}, "evidence_frames": [...]}
+        성공: {
+            "status":         "success",
+            "is_ai":          bool,
+            "confidence":     float,      # 0~1
+            "risk_level":     str,        # HIGH / MEDIUM / LOW
+            "reliability":    str,        # normal / low
+            "module_scores":  dict,       # 각 모듈별 점수
+            "analysis_details": dict,
+            "evidence_frames":  list,
+        }
         실패: {"status": "error", "message": str}
     """
     try:
         # ── 0. 입력 검증 ──────────────────────────────────────────────────
-        if not os.path.exists(video_path):
-            return {"status": "error", "message": f"파일 없음: {video_path}"}
-
-        ext = Path(video_path).suffix.lower()
-        if ext not in VIDEO_CONFIG["supported_formats"]:
-            return {
-                "status":  "error",
-                "message": f"지원하지 않는 형식: {ext}",
-            }
+        status, msg = _validate_video(video_path)
+        if status == "REJECT":
+            return {"status": "error", "message": msg}
 
         # ── 1. 프레임 추출 ────────────────────────────────────────────────
         frames, timestamps = extract_frames(video_path)
         if not frames:
             return {"status": "error", "message": "프레임 추출 실패"}
 
-        # 시공간 분석용 연속 프레임 (v2)
         temporal_segments = extract_temporal_frames(video_path)
 
-        # ── 2. 분석기 실행 ────────────────────────────────────────────────
-        scores  = {}
-        reasons = {}
-        frame_scores_clip = []
+        # ── 2. 영상 타입 판별 (미래 분기용) ──────────────────────────────
+        video_type = _detect_video_type(video_path, frames)
 
-        # CLIP
-        try:
-            clip_score, clip_reason, frame_scores_clip = _analyze_clip(frames)
-            scores["clip"]  = clip_score
-            reasons["clip"] = clip_reason
-        except Exception as e:
-            scores["clip"]  = None
-            reasons["clip"] = f"CLIP 오류: {e}"
+        # ── 3. 분석기 실행 ────────────────────────────────────────────────
+        # config.ANALYZERS에 등록된 분석기만 실행됩니다.
+        # 각 분석기에는 모든 데이터를 kwargs로 넘겨서
+        # 필요한 것만 꺼내 씁니다.
+        analyzer_kwargs = {
+            "frames":            frames,
+            "timestamps":        timestamps,
+            "temporal_segments": temporal_segments,
+            "video_path":        video_path,
+            "video_type":        video_type,
+        }
 
-        # FFT
-        try:
-            fft_score, fft_reason = _analyze_frequency(frames)
-            scores["frequency"]  = fft_score
-            reasons["frequency"] = fft_reason
-        except Exception as e:
-            scores["frequency"]  = None
-            reasons["frequency"] = f"FFT 오류: {e}"
+        # 분석기별 인자 매핑 (각 함수가 필요한 인자를 명시적으로 전달)
+        analyzer_arg_map = {
+            "clip":      {"frames": frames},
+            "frequency": {"frames": frames},
+            "metadata":  {"video_path": video_path},
+            "temporal":  {"segments": temporal_segments},
+        }
 
-        # 메타데이터
-        try:
-            meta_score, meta_reason, detected_regions = _analyze_metadata(video_path)
-            scores["metadata"]  = meta_score
-            reasons["metadata"] = meta_reason
-        except Exception as e:
-            scores["metadata"]  = None
-            reasons["metadata"] = f"메타데이터 오류: {e}"
-            detected_regions    = []
-
-        # 시공간 분석 (v2)
-        try:
-            temp_score, temp_reason = _analyze_temporal(temporal_segments)
-            scores["temporal"]  = temp_score
-            reasons["temporal"] = temp_reason
-        except Exception as e:
-            scores["temporal"]  = None
-            reasons["temporal"] = f"시공간 오류: {e}"
-
-        # ── 3. 앙상블 ─────────────────────────────────────────────────────
-        final_score = _ensemble(scores)
-        is_ai       = final_score >= AI_THRESHOLD
-
-        # ── 4. evidence 프레임 저장 ───────────────────────────────────────
-        if frame_scores_clip and len(frame_scores_clip) == len(timestamps):
-            sorted_ts = [
-                ts for _, ts in sorted(
-                    zip(frame_scores_clip, timestamps), reverse=True
+        results: dict[str, AnalyzerResult] = {}
+        for name in ANALYZERS:
+            fn = ANALYZER_MAP.get(name)
+            if fn is None:
+                continue
+            try:
+                args = analyzer_arg_map.get(name, {})
+                results[name] = fn(**args)
+            except Exception as e:
+                results[name] = AnalyzerResult(
+                    score=0.5, status="error",
+                    reason=f"{name} 오류: {e}",
                 )
-            ]
+
+        # ── 4. 앙상블 ─────────────────────────────────────────────────────
+        final_score = _ensemble(results)
+
+        # ── 5. 증거 프레임 저장 ───────────────────────────────────────────
+        # CLIP이 ok 상태면 CLIP 점수 기준으로 정렬, 아니면 시간순
+        clip_result = results.get("clip")
+        if clip_result and clip_result.status == "ok":
+            frame_scores = clip_result.detail.get("similarities", [])
+            if frame_scores and len(frame_scores) == len(timestamps) - 1:
+                # similarity가 낮은 프레임(AI 의심)이 앞으로 오도록 정렬
+                sorted_ts = [
+                    ts for _, ts in sorted(
+                        zip(frame_scores, timestamps[:-1])
+                    )
+                ]
+            else:
+                sorted_ts = timestamps
         else:
             sorted_ts = timestamps
 
@@ -588,20 +791,16 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
             top_n=3,
         )
 
-        # ── 5. 반환 ───────────────────────────────────────────────────────
-        return {
-            "status":     "success",
-            "is_ai":      bool(is_ai),
-            "confidence": round(final_score, 4),
-            "analysis_details": {
-                "details":          _build_description(final_score, reasons),
-                "detected_regions": detected_regions,
-            },
-            "evidence_frames": evidence_frames,
-        }
+        # ── 6. 결과 조립 및 반환 ─────────────────────────────────────────
+        return build_result_json(
+            final_score=final_score,
+            results=results,
+            weights=ANALYZER_WEIGHTS,
+            evidence_frames=evidence_frames,
+        )
 
     except Exception:
         return {
             "status":  "error",
-            "message": f"분석 중 예외 발생: {traceback.format_exc()}",
+            "message": f"분석 중 예외 발생:\n{traceback.format_exc()}",
         }
