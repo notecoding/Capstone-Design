@@ -12,16 +12,20 @@ app = Celery(
 )
 
 @app.task(name="start_ai_analysis")
-def start_ai_analysis(video_path, task_id):
+def start_ai_analysis(video_path, task_id, targets=None):
     output_dir = f"storage/results/{task_id}"
     os.makedirs(output_dir, exist_ok=True)
 
     result = run_ai_video_analysis(video_path, output_dir)
+
+    if targets is not None:
+        result["targets"] = targets
+
     return result
 
 
 @app.task(name="start_url_analysis")
-def start_url_analysis(url, task_id):
+def start_url_analysis(url, task_id, targets=None):
     try:
         os.makedirs("storage/uploads", exist_ok=True)
         os.makedirs("storage/results", exist_ok=True)
@@ -55,6 +59,10 @@ def start_url_analysis(url, task_id):
         os.makedirs(output_dir, exist_ok=True)
 
         result = run_ai_video_analysis(str(final_path), output_dir)
+
+        if targets is not None:
+            result["targets"] = targets
+
         return result
 
     except Exception as e:
