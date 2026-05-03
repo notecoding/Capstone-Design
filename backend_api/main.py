@@ -1,8 +1,10 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from celery.result import AsyncResult
 import uuid
 import os
+import json
 
 from app.worker import start_ai_analysis, app as celery_app
 from app.api.analysis import router as analysis_router
@@ -20,11 +22,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+
 app.include_router(analysis_router)
 
 @app.post("/api/v1/analyze")
-async def create_upload_file(file: UploadFile = File(...)):
+async def create_upload_file(
+    file: UploadFile = File(...),
+    targets: str = Form("[]")
+):
     task_id = str(uuid.uuid4())
+
+    try:
+        parsed_targets = json.loads(targets)
+    except Exception:
+        parsed_targets = []
 
     video_path = f"storage/uploads/{task_id}_{file.filename}"
     os.makedirs("storage/uploads", exist_ok=True)
@@ -32,7 +44,10 @@ async def create_upload_file(file: UploadFile = File(...)):
     with open(video_path, "wb") as buffer:
         buffer.write(await file.read())
 
-    task = start_ai_analysis.delay(video_path, task_id)
+    task = start_ai_analysis.apply_async(
+        args=[video_path, task_id, parsed_targets],
+        task_id=task_id
+    )
 
     return {"task_id": task.id, "status": "processing"}
 

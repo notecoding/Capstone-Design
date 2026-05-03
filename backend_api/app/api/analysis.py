@@ -8,6 +8,7 @@ router = APIRouter()
 
 class UrlRequest(BaseModel):
     url: str
+    targets: list[str] = []
 
 @router.post("/api/v1/analyze/url")
 def analyze_video_url(request: UrlRequest):
@@ -15,7 +16,7 @@ def analyze_video_url(request: UrlRequest):
         task_id = str(uuid.uuid4())
 
         task = start_url_analysis.apply_async(
-            args=[request.url, task_id],
+            args=[request.url, task_id, request.targets],
             task_id=task_id
         )
 
