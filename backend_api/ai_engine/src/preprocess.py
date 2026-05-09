@@ -58,7 +58,9 @@ def extract_frames(video_path: str) -> tuple[list[np.ndarray], list[float]]:
 
     # max_frames와 실제 프레임 수 중 작은 것으로 추출 개수 결정
     n       = min(VIDEO_CONFIG["max_frames"], total_frames)
-    indices = np.linspace(0, total_frames - 1, n, dtype=int).tolist()
+    # DeCoF 방식: 처음 32프레임에서 균등 추출
+    decof_max = min(31, total_frames - 1)
+    indices = np.linspace(0, decof_max, n, dtype=int).tolist()
 
     frames, timestamps = [], []
     for idx in indices:
