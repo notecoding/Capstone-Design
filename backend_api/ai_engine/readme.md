@@ -156,3 +156,40 @@ python ai_engine/test_run.py
 ```
 
 `ai_engine` 폴더 안에서 실행하면 `ModuleNotFoundError: No module named 'ai_engine'` 에러가 납니다.
+
+참고문헌 및 출처
+논문
+
+DeCoF: Generated Video Detection via Frame Consistency
+Ma et al., 2024
+https://arxiv.org/abs/2402.02085
+
+CLIP 프레임 간 유사도 기반 AI 영상 탐지 방법론 참고
+
+
+DeMamba: AI-Generated Video Detection on Million-Scale GenVideo Benchmark
+Chen et al., 2024
+https://arxiv.org/abs/2405.19707
+
+GenVideo 데이터셋 출처 및 탐지 벤치마크 참고
+
+
+
+데이터셋
+
+GenVideo-Val
+출처: https://modelscope.cn/datasets/cccnju/Gen-Video
+제공: DeMamba 논문 저자 (cccnju)
+구성: Fake 10개 카테고리 8302개 / Real(MSRVTT) 10000개
+카테고리: Crafter, Gen2, HotShot, Lavie, ModelScope,
+MoonValley, MorphStudio, Show_1, Sora, WildScrape
+
+모델
+
+CLIP ViT-L/14
+출처: OpenAI
+https://github.com/openai/CLIP
+라이선스: MIT
+open_clip
+출처: https://github.com/mlfoundations/open_clip
+라이선스: MIT
