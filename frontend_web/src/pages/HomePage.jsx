@@ -24,15 +24,13 @@ export default function HomePage() {
     setError("");
     try {
       const result = payload.type === "file"
-        ? await analyzeService.uploadFile(payload.value)
-        // TODO: 백엔드 targets 연동 완료 후 아래 주석 해제
-        // ? await analyzeService.uploadFile(payload.value, payload.targets)
-        : await analyzeService.analyzeUrl(payload.value);
-        // TODO: await analyzeService.analyzeUrl(payload.value, payload.targets);
+        ? await analyzeService.uploadFile(payload.value, payload.targets, payload.onProgress)
+        : await analyzeService.analyzeUrl(payload.value, payload.targets);
       navigate(`/result/${result.task_id}`, {
         state: { name: payload.type === "file" ? payload.value.name : payload.value, targets: payload.targets },
       });
     } catch (err) {
+      payload.onProgress?.(null);  // 오류 시 진행률 바 숨김
       setError(err.response?.data?.detail || "업로드 중 오류가 발생했습니다.");
     }
   }
@@ -77,7 +75,7 @@ export default function HomePage() {
       {/* 사용 방법 */}
       <section className="mt-fluid-xl mb-fluid-xl">
         <span className="sec-label" style={{ textAlign: "center", display: "block" }}>사용 방법</span>
-        <div className="grid grid-cols-3 gap-fluid-md">
+        <div className="grid grid-cols-3 gap-fluid-md how-to-grid">
           {HOW_TO.map(({ step, title, desc }) => (
             <div key={step} className="card flex flex-col items-center text-center">
               <span className="text-fluid-xs font-bold mb-fluid-sm"

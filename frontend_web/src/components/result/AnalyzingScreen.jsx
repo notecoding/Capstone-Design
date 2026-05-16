@@ -1,18 +1,32 @@
 // src/components/result/AnalyzingScreen.jsx
 import { useState, useEffect } from "react";
 
+// ── 분석 작업 목록 ───────────────────────────────────────────────
+// [현재] 사용자에게 보이는 이름(얼굴 조작 등)을 그대로 유지.
+//        백엔드는 실제로 clip·frequency·metadata·temporal을 실행하지만
+//        UI는 사용자가 선택한 타겟 이름으로 표시.
+//
+// [TODO] 백엔드 targets 연동 완료 후 아래 작업 필요:
+//        1. worker.py → inference.py에 targets 실제 전달
+//        2. key 값을 백엔드 모듈명(clip·frequency·metadata·temporal)으로 변경
+//        3. targets.js id도 동일하게 통일
 const ALL_TASKS = [
-  { id: "extract", key: null,    name: "프레임 추출",           sub: "영상에서 핵심 프레임 선별" },
-  { id: "face",    key: "face",  name: "얼굴 조작 탐지",        sub: "딥페이크 패턴 분석" },
-  { id: "scene",   key: "bg",    name: "배경·움직임 분석",      sub: "AI 생성 패턴 검사" },
-  { id: "voice",   key: "voice", name: "음성·메타데이터 검사",  sub: "합성 음성 및 파일 정보 분석" },
+  { id: "extract", key: null,     name: "프레임 추출",      sub: "영상에서 핵심 프레임 선별" },
+  { id: "face",    key: "face",   name: "얼굴 조작 탐지",   sub: "딥페이크 패턴 분석" },
+  { id: "bg",      key: "bg",     name: "배경 생성 분석",   sub: "AI 생성 패턴 검사" },
+  { id: "motion",  key: "motion", name: "움직임 패턴",      sub: "부자연스러운 모션 탐지" },
+  { id: "voice",   key: "voice",  name: "음성·메타데이터",  sub: "합성 음성 및 파일 정보 분석" },
 ];
 
 const STEP_DELAY_MS = 600; // 작업 1개당 체크 간격
 
 function filterTasks(targets) {
-  if (!targets || targets.length === 0) return ALL_TASKS;
-  return ALL_TASKS.filter(t => t.key === null || targets.includes(t.key));
+  // [현재] 백엔드가 항상 4개 모듈 전부 실행하므로 targets 무관하게 전체 표시
+  // [TODO] 백엔드 targets 연동 완료 후 아래 주석 해제하고 위 return 제거
+  //        연동 조건: worker.py → inference.py에 targets 전달,
+  //                  targets.js id를 clip·frequency·metadata·temporal로 변경
+  return ALL_TASKS;
+  // return ALL_TASKS.filter(t => t.key === null || targets.includes(t.key));
 }
 
 // taskStatus + completedCount 로 각 작업 상태 결정

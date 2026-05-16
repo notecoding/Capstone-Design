@@ -145,3 +145,24 @@ body { background: var(--bg); color: var(--text-1); }
 @utility rounded-fluid-xl { border-radius: var(--r-xl); }
 
 @utility max-w-content { max-width: var(--content-max); }
+/* ── 모바일 반응형 ────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  /* 콘텐츠 최대 너비 — 모바일에서 꽉 채움 */
+  :root {
+    --content-max: 100%;
+  }
+
+  /* HOW_TO 3열 → 1열 */
+  .how-to-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* HistoryItem — 좁은 화면에서 바 숨김 */
+  .history-bar { display: none !important; }
+
+  /* VerdictBanner — 아이콘 크기 축소 */
+  .verdict-icon {
+    width: 36px !important;
+    height: 36px !important;
+  }
+}

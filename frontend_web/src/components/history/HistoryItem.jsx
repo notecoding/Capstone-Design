@@ -17,7 +17,7 @@ export default function HistoryItem({ item }) {
       state: {
         name:        item.name,
         fromHistory: true,
-        result:      item.result,  // 저장된 결과 전달 → 폴링 없이 바로 표시
+        result:      item.result,
       },
     });
   }
@@ -31,6 +31,7 @@ export default function HistoryItem({ item }) {
 
       <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: cfg.dot }} />
 
+      {/* 이름 + 날짜 — flex-1로 남은 공간 차지 */}
       <div className="flex-1 min-w-0">
         <p className="text-fluid-sm font-semibold truncate" style={{ color: "var(--text-1)" }}>
           {shortenName(item.name)}
@@ -38,7 +39,8 @@ export default function HistoryItem({ item }) {
         <p className="text-fluid-xs mt-0.5" style={{ color: "var(--text-3)" }}>{item.date}</p>
       </div>
 
-      <div className="flex items-center gap-fluid-xs flex-shrink-0">
+      {/* 진행 바 — 모바일에서 숨김 */}
+      <div className="history-bar flex items-center gap-fluid-xs flex-shrink-0">
         <div className="rounded-full overflow-hidden" style={{ width: 64, height: 5, background: "var(--border)" }}>
           <div className="h-full rounded-full" style={{ width: `${item.probability}%`, background: cfg.dot }} />
         </div>
@@ -47,6 +49,7 @@ export default function HistoryItem({ item }) {
         </span>
       </div>
 
+      {/* 뱃지 — 항상 표시 */}
       <span className="text-fluid-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
             style={{ background: cfg.histBadge.bg, color: cfg.histBadge.color }}>
         {cfg.histLabel}
