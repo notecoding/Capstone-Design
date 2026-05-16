@@ -1,26 +1,29 @@
 // src/utils/history.js
-const COOKIE_KEY = "trueview_history";
-const MAX_ITEMS  = 10;
-const EXPIRES    = 30;
+const STORAGE_KEY = "trueview_history";
+const MAX_ITEMS   = 10;
 
-function getCookie(key) {
-  const match = document.cookie.split("; ").find(r => r.startsWith(`${key}=`));
-  if (!match) return null;
-  try { return JSON.parse(decodeURIComponent(match.split("=")[1])); }
+// ── localStorage 헬퍼 ────────────────────────────────────────────
+// 쿠키(4KB 한계)에서 localStorage(5MB)로 변경.
+// 만료 기능은 없으므로 사용자가 직접 지우거나 clearHistory() 호출 시 삭제됨.
+
+function getStorage(key) {
+  try { return JSON.parse(localStorage.getItem(key)); }
   catch { return null; }
 }
 
-function setCookie(key, value, days) {
-  const expires = new Date(Date.now() + days * 864e5).toUTCString();
-  document.cookie = `${key}=${encodeURIComponent(JSON.stringify(value))}; expires=${expires}; path=/; SameSite=Lax`;
+function setStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); }
+  catch (e) { console.error("히스토리 저장 실패:", e); }
 }
 
-function removeCookie(key) {
-  document.cookie = `${key}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/`;
+function removeStorage(key) {
+  localStorage.removeItem(key);
 }
+
+// ── 공개 API ─────────────────────────────────────────────────────
 
 export function loadHistory() {
-  return getCookie(COOKIE_KEY) ?? [];
+  return getStorage(STORAGE_KEY) ?? [];
 }
 
 export function addHistory({ taskId, name, apiResult }) {
@@ -28,7 +31,7 @@ export function addHistory({ taskId, name, apiResult }) {
 
   const confidence  = apiResult.confidence ?? 0;
   const probability = Math.round(confidence * 100);
-  const verdict     = probability >= 70 ? "danger" : probability >= 40 ? "warn" : "safe";
+  const verdict     = probability >= 70 ? "danger" : probability >= 40 ? "warning" : "safe";
 
   const newItem = {
     id:          taskId,
@@ -37,14 +40,14 @@ export function addHistory({ taskId, name, apiResult }) {
     verdict,
     isAi:        apiResult.is_ai,
     date:        new Date().toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }),
-    result:      apiResult,   // ← 결과 전체 저장 (기록 재조회용)
+    result:      apiResult,  // 결과 전체 저장 (재조회용 — localStorage라 용량 여유 있음)
   };
 
   const prev    = loadHistory();
   const updated = [newItem, ...prev].slice(0, MAX_ITEMS);
-  setCookie(COOKIE_KEY, updated, EXPIRES);
+  setStorage(STORAGE_KEY, updated);
 }
 
 export function clearHistory() {
-  removeCookie(COOKIE_KEY);
+  removeStorage(STORAGE_KEY);
 }
