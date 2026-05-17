@@ -24,6 +24,11 @@ from ai_engine.src.postprocess import (
 )
 
 
+def _emit_progress(progress_callback, state, status, progress, message, selected_analyzers=None):
+    if progress_callback is not None:
+        progress_callback(state, status, progress, message, selected_analyzers)
+
+
 def _detect_video_type(video_path: str, frames: list[np.ndarray]) -> dict:
     return {
         "has_face": False,
@@ -37,6 +42,7 @@ def _validate_video(video_path: str) -> tuple[str, str]:
         return "REJECT", f"파일 없음: {video_path}"
 
     ext = Path(video_path).suffix.lower()
+
     if ext not in VIDEO_CONFIG["supported_formats"]:
         return "REJECT", f"지원하지 않는 형식: {ext}"
 
@@ -69,11 +75,13 @@ def _load_clip():
     import open_clip
 
     device = CLIP_CONFIG["device"]
+
     _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(
         CLIP_CONFIG["model_name"],
         pretrained=CLIP_CONFIG["pretrained"],
         device=device,
     )
+
     _clip_model.eval()
 
 
@@ -143,20 +151,24 @@ def _analyze_frequency(frames: list[np.ndarray], **kwargs) -> AnalyzerResult:
 
         lo = mag[dist <= r].sum()
         hi = mag[dist > r].sum()
+
         all_hf.append(hi / (lo + hi + 1e-8))
 
         profile = []
 
         for rr in range(1, min(cx, cy)):
             mask = (dist >= rr - 0.5) & (dist < rr + 0.5)
+
             if mask.sum() > 0:
                 profile.append(mag[mask].mean())
 
         arr = np.array(profile)
+
         all_rv.append(float(np.var(arr) / (np.mean(arr) + 1e-8)))
 
         he = mag[cy - 2:cy + 2, :].sum()
         ve = mag[:, cx - 2:cx + 2].sum()
+
         all_da.append(abs(he - ve) / (he + ve + 1e-8))
 
     avg_hf = float(np.mean(all_hf))
@@ -195,7 +207,9 @@ def _analyze_metadata(video_path: str, **kwargs) -> AnalyzerResult:
             encoding="utf-8",
             errors="ignore",
         )
+
         data = json.loads(result.stdout) if result.returncode == 0 else {}
+
     except Exception as e:
         return AnalyzerResult(
             score=0.5,
@@ -447,6 +461,65 @@ ANALYZER_MAP = {
 }
 
 
+TARGET_ANALYZER_MAP = {
+    "face": ["clip"],
+    "motion": ["temporal"],
+    "background": ["frequency"],
+    "bg": ["frequency"],
+    "voice": ["metadata"],
+    "clip": ["clip"],
+    "frequency": ["frequency"],
+    "metadata": ["metadata"],
+    "temporal": ["temporal"],
+}
+
+
+ANALYZER_STATUS_MAP = {
+    "clip": {
+        "state": "ANALYZING_CLIP",
+        "status": "analyzing_clip",
+        "message": "프레임 유사도 기반 분석을 진행하는 중입니다.",
+    },
+    "frequency": {
+        "state": "ANALYZING_FREQUENCY",
+        "status": "analyzing_frequency",
+        "message": "주파수 기반 영상 흔적을 분석하는 중입니다.",
+    },
+    "metadata": {
+        "state": "ANALYZING_METADATA",
+        "status": "analyzing_metadata",
+        "message": "영상 메타데이터를 분석하는 중입니다.",
+    },
+    "temporal": {
+        "state": "ANALYZING_TEMPORAL",
+        "status": "analyzing_temporal",
+        "message": "프레임 간 움직임 일관성을 분석하는 중입니다.",
+    },
+}
+
+
+def _select_analyzers(targets=None) -> list[str]:
+    if not targets:
+        return list(ANALYZERS)
+
+    selected = []
+
+    for target in targets:
+        mapped = TARGET_ANALYZER_MAP.get(target)
+
+        if mapped is None:
+            continue
+
+        for analyzer in mapped:
+            if analyzer in ANALYZERS and analyzer not in selected:
+                selected.append(analyzer)
+
+    if not selected:
+        return list(ANALYZERS)
+
+    return selected
+
+
 def _ensemble(results: dict[str, AnalyzerResult]) -> float:
     weighted_sum = 0.0
     total_weight = 0.0
@@ -477,8 +550,16 @@ def _get_video_duration(video_path: str) -> float:
     return round(total_frames / fps, 2)
 
 
-def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
+def run_ai_video_analysis(video_path: str, output_dir: str, targets=None, progress_callback=None) -> dict:
     try:
+        _emit_progress(
+            progress_callback,
+            "VALIDATING",
+            "validating",
+            10,
+            "영상 파일 형식과 길이를 확인하는 중입니다."
+        )
+
         status, msg = _validate_video(video_path)
 
         if status == "REJECT":
@@ -486,6 +567,14 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
                 "status": "error",
                 "message": msg,
             }
+
+        _emit_progress(
+            progress_callback,
+            "EXTRACTING_FRAMES",
+            "extracting_frames",
+            20,
+            "분석용 대표 프레임을 추출하는 중입니다."
+        )
 
         frames, timestamps = extract_frames(video_path)
 
@@ -495,8 +584,16 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
                 "message": "프레임 추출 실패",
             }
 
+        _emit_progress(
+            progress_callback,
+            "EXTRACTING_TEMPORAL",
+            "extracting_temporal",
+            30,
+            "시공간 분석용 프레임 구간을 추출하는 중입니다."
+        )
+
         temporal_segments = extract_temporal_frames(video_path)
-        video_type = _detect_video_type(video_path, frames)
+        _detect_video_type(video_path, frames)
 
         analyzer_arg_map = {
             "clip": {"frames": frames},
@@ -505,9 +602,33 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
             "temporal": {"segments": temporal_segments},
         }
 
+        selected_analyzers = _select_analyzers(targets)
+
         results: dict[str, AnalyzerResult] = {}
 
-        for name in ANALYZERS:
+        total_analyzers = len(selected_analyzers)
+
+        for index, name in enumerate(selected_analyzers):
+            analyzer_status = ANALYZER_STATUS_MAP.get(name, {
+                "state": "ANALYZING",
+                "status": f"analyzing_{name}",
+                "message": f"{name} 분석을 진행하는 중입니다.",
+            })
+
+            progress = 40
+
+            if total_analyzers > 0:
+                progress = 40 + int((index / total_analyzers) * 40)
+
+            _emit_progress(
+                progress_callback,
+                analyzer_status["state"],
+                analyzer_status["status"],
+                progress,
+                analyzer_status["message"],
+                selected_analyzers
+            )
+
             fn = ANALYZER_MAP.get(name)
 
             if fn is None:
@@ -516,6 +637,7 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
             try:
                 args = analyzer_arg_map.get(name, {})
                 results[name] = fn(**args)
+
             except Exception as e:
                 results[name] = AnalyzerResult(
                     score=0.5,
@@ -548,12 +670,30 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
                 sorted_ts = [ts for ts, _ in ts_prob_pairs]
                 probabilities = [prob for _, prob in ts_prob_pairs]
 
+        _emit_progress(
+            progress_callback,
+            "SAVING_EVIDENCE",
+            "saving_evidence",
+            85,
+            "분석 근거 프레임을 저장하는 중입니다.",
+            selected_analyzers
+        )
+
         evidence_frames = save_evidence_frames(
             video_path=video_path,
             output_dir=output_dir,
             timestamps=sorted_ts,
             probabilities=probabilities,
             top_n=3,
+        )
+
+        _emit_progress(
+            progress_callback,
+            "BUILDING_RESULT",
+            "building_result",
+            95,
+            "최종 분석 결과를 생성하는 중입니다.",
+            selected_analyzers
         )
 
         result_json = build_result_json(
@@ -564,6 +704,8 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
         )
 
         result_json["duration"] = _get_video_duration(video_path)
+        result_json["selected_targets"] = targets or []
+        result_json["selected_analyzers"] = selected_analyzers
 
         return result_json
 
