@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+celery
+redis
+yt-dlp
+opencv-python
+numpy
+pillow
+python-dotenv
+torch
+open-clip-torch

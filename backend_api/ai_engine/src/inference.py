@@ -118,6 +118,7 @@ def _validate_video(video_path: str) -> tuple[str, str]:
         return "REJECT", f"파일 없음: {video_path}"
 
     ext = Path(video_path).suffix.lower()
+
     if ext not in VIDEO_CONFIG["supported_formats"]:
         return "REJECT", f"지원하지 않는 형식: {ext}"
 
@@ -232,6 +233,7 @@ def _load_clip():
     import open_clip
 
     device = CLIP_CONFIG["device"]
+
     _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(
         CLIP_CONFIG["model_name"],   # ViT-L-14
         pretrained=CLIP_CONFIG["pretrained"],
@@ -370,14 +372,17 @@ def _analyze_frequency(frames: list[np.ndarray], **kwargs) -> AnalyzerResult:
         profile = []
         for rr in range(1, min(cx, cy)):
             mask = (dist >= rr - 0.5) & (dist < rr + 0.5)
+
             if mask.sum() > 0:
                 profile.append(mag[mask].mean())
         arr = np.array(profile)
+
         all_rv.append(float(np.var(arr) / (np.mean(arr) + 1e-8)))
 
         # 방향 비대칭: 수평/수직 에너지 불균형
         he = mag[cy - 2:cy + 2, :].sum()
         ve = mag[:, cx - 2:cx + 2].sum()
+
         all_da.append(abs(he - ve) / (he + ve + 1e-8))
 
     avg_hf = float(np.mean(all_hf))
@@ -445,7 +450,9 @@ def _analyze_metadata(video_path: str, **kwargs) -> AnalyzerResult:
             capture_output=True, text=True,
             timeout=30, encoding="utf-8", errors="ignore",
         )
+
         data = json.loads(result.stdout) if result.returncode == 0 else {}
+
     except Exception as e:
         return AnalyzerResult(
             score=0.5, status="error",
@@ -791,6 +798,14 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
         if not frames:
             return {"status": "error", "message": "프레임 추출 실패"}
 
+        _emit_progress(
+            progress_callback,
+            "EXTRACTING_TEMPORAL",
+            "extracting_temporal",
+            30,
+            "시공간 분석용 프레임 구간을 추출하는 중입니다."
+        )
+
         temporal_segments = extract_temporal_frames(video_path)
 
         # ── 2. 영상 타입 판별 (미래 분기용) ──────────────────────────────
@@ -816,6 +831,8 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
             "temporal":  {"segments": temporal_segments},
         }
 
+        selected_analyzers = _select_analyzers(targets)
+
         results: dict[str, AnalyzerResult] = {}
         for name in ANALYZERS:
             fn = ANALYZER_MAP.get(name)
@@ -824,6 +841,7 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
             try:
                 args = analyzer_arg_map.get(name, {})
                 results[name] = fn(**args)
+
             except Exception as e:
                 results[name] = AnalyzerResult(
                     score=0.5, status="error",
@@ -856,6 +874,15 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
                 sorted_ts     = [ts for ts, _ in ts_prob_pairs]
                 probabilities = [prob for _, prob in ts_prob_pairs]
 
+        _emit_progress(
+            progress_callback,
+            "SAVING_EVIDENCE",
+            "saving_evidence",
+            85,
+            "분석 근거 프레임을 저장하는 중입니다.",
+            selected_analyzers
+        )
+
         evidence_frames = save_evidence_frames(
             video_path=video_path,
             output_dir=output_dir,
@@ -874,6 +901,8 @@ def run_ai_video_analysis(video_path: str, output_dir: str) -> dict:
 
         # duration 추가 (영상 길이, 초 단위)
         result_json["duration"] = _get_video_duration(video_path)
+        result_json["selected_targets"] = targets or []
+        result_json["selected_analyzers"] = selected_analyzers
 
         return result_json
 
