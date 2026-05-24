@@ -35,13 +35,14 @@ function FrameImage({ src }) {
   const [failed, setFailed] = useState(false);
   if (failed || !src) return <FramePlaceholder />;
   return (
-    <img src={src} alt="의심 프레임"
-         className="w-full object-cover"
-         style={{ maxHeight: 220, display: "block" }}
-         onError={() => setFailed(true)} />
+    <img
+      src={src}
+      alt="의심 프레임"
+      style={{ width: "100%", height: "auto", display: "block" }}
+      onError={() => setFailed(true)}
+    />
   );
 }
-
 export default function AnalysisTimeline({ frames, duration, taskId }) {
   const [selected, setSelected] = useState(null);
   const [tooltip,  setTooltip]  = useState(null);
