@@ -15,24 +15,30 @@ ai_engine/src/config.py
 # ── 활성화할 분석기 목록 (Registry) ───────────────────────────────────────
 # 여기에 이름을 추가하는 것만으로 새 분석기가 파이프라인에 포함됩니다.
 # 나중에 rppg, physics, cnn_detect 등을 추가할 때 이 목록에만 넣으면 됩니다.
+# 기본 분析기 — 타겟 유무 관계없이 항상 실행
 ANALYZERS = [
-    "clip",
-    "frequency",
-    "metadata",
-    "temporal",
-    # "rppg",        # Phase B: 얼굴 영상 생체 신호 (미래)
-    # "physics",     # Phase C: 물리 일관성 체크 (미래)
-    # "cnn_detect",  # Phase A: 주파수 심화 (미래)
+    "clip",       # DeCoF Transformer — 핵심
+    "frequency",  # FFT 주파수 분析 (기존 3가지 + 심화 3가지)
+    "metadata",   # 메타데이터 분析
+    # "temporal", # 시공간 분析 비활성화 (Phase C에서 교체 예정)
 ]
 
 # ── 앙상블 가중치 (합 = 1.0) ──────────────────────────────────────────────
 # CLIP을 DeCoF 방식으로 교체했으므로 신뢰도가 높아져 가중치 상향.
-# 임계값 검증(validate_thresholds.py) 후 수치 조정 권장. 다음에 다시 2라운드 학습할 때 해보기 근데 뺄확률 높음
+# Temporal도 핵심 모듈이므로 높게 유지.
+# 임계값 검증(validate_thresholds.py) 후 수치 조정 권장.
 ANALYZER_WEIGHTS = {
-    "clip":      0.60,   # 올리기
-    "frequency": 0.25,   # 조금 올리기
-    "metadata":  0.15,   # 올리기
-    "temporal":  0.00,   # 0으로
+    # 기본 분析기
+    "clip":      0.60,   # DeCoF Transformer (핵심 — 2라운드 학습 완료)
+    "frequency": 0.25,   # FFT 주파수 분析 심화
+    "metadata":  0.15,   # 메타데이터 분析 (보조)
+    "temporal":  0.00,   # 시공간 분析 (보류 — Phase C에서 교체 예정)
+
+    # 타겟 추가 분析기 (Phase 완성 후 가중치 설정)
+    "rppg":      0.00,   # 얼굴 타겟 — Phase B: 혈류 신호 감지
+    "fft_deep":  0.00,   # 배경 타겟 — MediaPipe 배경 크롭 후 활성화 예정
+    "physics":   0.00,   # 움직임 타겟 — Phase C: 물리 일관성 감지
+    "audio":     0.00,   # 음성 타겟 — 추후 추가 예정
 }
 
 # ── is_ai 판정 임계값 ──────────────────────────────────────────────────────
@@ -57,7 +63,8 @@ VIDEO_CONFIG = {
     "frame_size": (224, 224),
     "supported_formats": [".mp4", ".mov", ".avi", ".mkv", ".webm"],
     # 영상 길이 제한 (초 단위)
-    "min_duration": 2.0,    # 2초 미만 → 판단 불가 (프레임 부족)
+    "min_duration": 0.5,    # 0.5초 미만 → 판단 불가
+                             # Crafter(1.7초), HotShot(1.0초), MoonValley(1.8초) 대응
     "max_duration": 600.0,  # 10분 초과 → 처리 거부
 }
 
