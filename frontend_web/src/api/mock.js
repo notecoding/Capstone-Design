@@ -128,7 +128,7 @@ function mockUploadProgress(onProgress) {
 export const mockAnalyzeService = {
   _callCount: 0,
 
-  uploadFile: async (file, onProgress) => {
+ uploadFile: async (file, targets, onProgress) => {
     await mockUploadProgress(onProgress);
     return { task_id: SCENARIOS[MOCK_SCENARIO].task_id, status: "processing" };
   },

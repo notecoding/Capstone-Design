@@ -10,6 +10,7 @@ function fmtTime(sec) {
 }
 
 function resolveImgUrl(frame, taskId) {
+  if (frame.image_url) return frame.image_url.startsWith("http") ? frame.image_url : `${API_URL}${frame.image_url}`;
   if (frame.path)      return `${API_URL}/${frame.path}`;
   if (frame.file_name) return `${API_URL}/storage/results/${taskId}/${frame.file_name}`;
   return null;

@@ -89,7 +89,7 @@ export default function VideoUpload({ onSubmit }) {
       {/* URL 입력 */}
       <div
         className="flex items-center gap-fluid-sm my-fluid-sm px-fluid-sm py-fluid-sm"
-        style={{ background: "var(--text-1)", borderRadius: "var(--r-md)" }}
+        style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--r-md)" }}
       >
         <svg
           width="15"
