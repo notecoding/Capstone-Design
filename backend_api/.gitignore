@@ -18,3 +18,4 @@ storage/results/*
 AI 모델 캐시
 
 .cache/
+backend_api/.env
