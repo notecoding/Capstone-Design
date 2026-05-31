@@ -27,13 +27,14 @@ from ai_engine.src.base import AnalyzerResult
 from ai_engine.src.config import (
     ANALYZERS, ANALYZER_WEIGHTS,
     CLIP_CONFIG, FREQUENCY_CONFIG, METADATA_CONFIG,
-    VIDEO_CONFIG,
-    # TEMPORAL_CONFIG,  # 시공간 분析기 비활성화
+    VIDEO_CONFIG, PHYSICS_CONFIG,
+    # TEMPORAL_CONFIG,  # 시공간 분석기 비활성화
 )
 from ai_engine.src.preprocess import (
     extract_frames,
-    # extract_temporal_frames,  # 시공간 분析기 비활성화
+    # extract_temporal_frames,  # 시공간 분석기 비활성화
 )
+from ai_engine.src import region
 from ai_engine.src.postprocess import (
     save_evidence_frames,
     build_result_json,
@@ -52,16 +53,27 @@ def _emit_progress(progress_callback, state, status, progress, message, selected
 
 def _detect_video_type(video_path: str, frames: list[np.ndarray]) -> dict:
     """
-    [현재] 모든 플래그 False 고정.
-    [미래] Phase B: has_face=True → rPPG 활성화
-           Phase C: has_face=False → 물리 일관성 활성화
-    반환값을 반드시 변수에 받아서 사용할 것.
+    영상의 영역 정보 감지 (region.py에 위임).
+
+    반환 (region.detect_regions 결과):
+      has_face, face_box        : 얼굴 존재 + 대표 박스
+      has_audio, has_voice, speech_ratio
+      motion_level              : 0~1
+      face_mode, seg_mode       : 사용된 감지기 (디버그용)
+
+    [용도]
+      face/background 타겟 선택 시 크롭/마스킹에 face_box 사용.
+      voice/motion은 현재 감지 flag만 (판별은 추후 audio/physics).
+      감지 중 예외가 나도 분석 본체는 진행되도록 안전한 기본값 반환.
     """
-    return {
-        "has_face":      False,
-        "is_short":      False,
-        "is_compressed": False,
-    }
+    try:
+        return region.detect_regions(video_path, frames)
+    except Exception:
+        return {
+            "has_face": False, "face_box": None,
+            "has_audio": False, "has_voice": False, "speech_ratio": 0.0,
+            "motion_level": 0.0, "face_mode": "none", "seg_mode": "none",
+        }
 
 
 # ── 입력 검증 ─────────────────────────────────────────────────
@@ -510,6 +522,76 @@ def _analyze_metadata(video_path: str, **kwargs) -> AnalyzerResult:
 #                 f"프레임차분={best['diff']:.3f}, 텍스처={best['tex']:.3f}, 엣지={best['edge']:.3f} "
 #                 f"(구간 {len(seg_scores)}개 평균)"),
 #         detail={"segments": seg_scores},
+#     )
+
+
+# ── 물리 일관성 분석기 (physics — temporal 대체) ───────────────
+# NSG 논문 원리의 광류 제약식 경량 근사. 학습 불필요(룰베이스).
+# 움직임이 외형을 보존하는지(물리 타당성)를 밝기보존 잔차로 측정한다.
+
+def _physics_residual(f_prev, f_cur):
+    """
+    프레임 쌍의 정규화 운동보상 잔차(motion-compensated residual)를 반환.
+      광류 (u,v)로 이전 프레임을 다음 프레임 위치로 워핑 → warped
+      잔차 = |warped - cur|  (움직임으로 설명 안 되는 외형 변화)
+      정규화 = 잔차평균 / (프레임 대비(표준편차) + eps)  ← 텍스처/대비 의존 완화
+    자연스러운 움직임이면 워핑이 잘 맞아 잔차 작고, 물리 위반이면 큼.
+    """
+    g_prev = cv2.cvtColor(f_prev, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    g_cur  = cv2.cvtColor(f_cur,  cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    flow = cv2.calcOpticalFlowFarneback(
+        g_prev.astype(np.uint8), g_cur.astype(np.uint8),
+        None, 0.5, 3, 15, 3, 5, 1.2, 0
+    )
+    h, w = g_prev.shape
+    grid_x, grid_y = np.meshgrid(np.arange(w, dtype=np.float32),
+                                 np.arange(h, dtype=np.float32))
+    map_x = grid_x + flow[..., 0]
+    map_y = grid_y + flow[..., 1]
+    warped = cv2.remap(g_prev, map_x, map_y, cv2.INTER_LINEAR,
+                       borderMode=cv2.BORDER_REPLICATE)
+
+    err = np.abs(warped - g_cur)               # 운동으로 설명 안 된 변화
+    contrast = float(g_cur.std()) + PHYSICS_CONFIG["eps"]
+    return float(err.mean()) / contrast        # 정규화 잔차(스칼라)
+
+
+def _analyze_physics(frames: list[np.ndarray], **kwargs) -> AnalyzerResult:
+    """
+    물리 일관성 점수. 높을수록 물리 위반(AI 의심).
+    NSG(공간 그래디언트 대비 시간 변화) 원리를 광류 제약식 잔차로 경량 근사.
+    """
+    if not frames or len(frames) < 2:
+        return AnalyzerResult(score=0.5, status="skip",
+                              reason="물리: 분석할 프레임 부족")
+
+    max_pairs = PHYSICS_CONFIG["max_pairs"]
+    pairs = min(len(frames) - 1, max_pairs)
+    per_frame = []          # 프레임 쌍별 정규화 운동보상 잔차
+    for i in range(pairs):
+        per_frame.append(_physics_residual(frames[i], frames[i + 1]))
+
+    if not per_frame:
+        return AnalyzerResult(score=0.5, status="skip", reason="물리: 유효 구간 없음")
+
+    mean_resid = float(np.mean(per_frame))
+    std_resid  = float(np.std(per_frame))   # 시간적 변동(움직임 일관성 흔들림)
+
+    # 0~1 매핑: 평균 잔차 + 변동 가중
+    raw = mean_resid + PHYSICS_CONFIG["std_weight"] * std_resid
+    norm = float(np.clip(raw / PHYSICS_CONFIG["resid_norm"], 0.0, 1.0))
+    # calibrate 결과 AI가 잔차 낮음(매끄러운 움직임) → 반전: 잔차 작을수록 AI 점수 높게
+    score = (1.0 - norm) if PHYSICS_CONFIG.get("invert") else norm
+
+    return AnalyzerResult(
+        score=score, status="ok",
+        reason=(f"물리(NSG근사): 정규화잔차 평균={mean_resid:.3f}, "
+                f"변동={std_resid:.3f}, AI점수={score:.3f} (쌍 {pairs}개, "
+                f"{'반전' if PHYSICS_CONFIG.get('invert') else '정방향'})"),
+        detail={"mean_residual": round(mean_resid, 4),
+                "std_residual":  round(std_resid, 4),
+                "per_frame":     [round(x, 4) for x in per_frame]},
     )
 
 
@@ -519,25 +601,39 @@ ANALYZER_MAP = {
     "clip":      _analyze_clip,
     "frequency": _analyze_frequency,
     "metadata":  _analyze_metadata,
+    # 타겟 영역 분석기 — 임시: DeCoF(_analyze_clip)를 크롭/마스킹 프레임에 그대로 적용
+    "clip_face":       _analyze_clip,  # 얼굴 크롭 프레임 입력
+    "clip_background": _analyze_clip,  # 배경 마스킹 프레임 입력
+    "physics":         _analyze_physics,  # 움직임 타겟 — 물리 일관성 (temporal 대체)
 #     "temporal":  _analyze_temporal,
     # Phase B: "rppg":    _analyze_rppg,    (얼굴 혈류 신호 감지)
 #     # Phase C: "physics": _analyze_physics, (물리 일관성 — temporal 대체 예정)
 }
 
 # 타겟별 추가 분석기 매핑
-# 기본 분석기(ANALYZERS) 전체 실행 후 타겟에 맞는 분석기를 추가로 append
-# 추가 분석기는 config.py에서 가중치 0으로 설정 → 완성 후 가중치 올리면 활성화
+# [현재 정책] 타겟을 골라도 추가 분석기는 붙이지 않고 기본 3개(clip/frequency/metadata)만 실행.
+#            타겟의 역할은 '탐지'까지만 — region.detect_regions가 얼굴/배경/음성/움직임을
+#            탐지해 결과 JSON의 "region"에 담는다. 분석(판별)은 base 분석기가 전담.
+# [추후] 영역 고유 분석기가 완성되면 아래에 매핑을 채워 활성화:
+#   "face":       ["clip_face"]   또는 ["clip_face", "rppg"]
+#   "background": ["clip_background"] 또는 ["clip_background", "fft_deep"]
+#   "motion":     ["physics"]
+#   "voice":      ["audio"]
+# 매핑에 넣은 분석기는 ANALYZER_MAP 등록 + 가중치(config.py)가 있어야 실제로 점수에 반영됨.
 TARGET_EXTRA_MAP = {
-    "face":       ["rppg"],     # 얼굴 — Phase B: 혈류 신호 감지 (미완성)
-    "background": ["fft_deep"], # 배경 — MediaPipe 배경 크롭 후 활성화 예정
-    "motion":     ["physics"],  # 움직임 — Phase C: 물리 일관성 감지 (미완성)
-    "voice":      ["audio"],    # 음성 — 추후 추가 예정
+    # 움직임 타겟: 물리 일관성(physics) 연결. 가중치 0이라 최종 점수엔 영향 없고 점수만 기록.
+    # NSG 원리 경량 근사 — 캡스톤 구조용. calibrate 후 가중치 상향 검토.
+    "motion": ["physics"],
+    # 나머지(face/background/voice)는 고유 분석기 미구현 → 탐지만, 분석은 base.
 }
 
 ANALYZER_STATUS_MAP = {
     "clip":      {"state": "ANALYZING_CLIP",      "status": "analyzing_clip",      "message": "프레임 유사도 기반 분석을 진행하는 중입니다."},
     "frequency": {"state": "ANALYZING_FREQUENCY", "status": "analyzing_frequency", "message": "주파수 기반 영상 흔적을 분석하는 중입니다."},
     "metadata":  {"state": "ANALYZING_METADATA",  "status": "analyzing_metadata",  "message": "영상 메타데이터를 분석하는 중입니다."},
+    "clip_face":       {"state": "ANALYZING_FACE",       "status": "analyzing_face",       "message": "얼굴 영역을 분석하는 중입니다."},
+    "clip_background": {"state": "ANALYZING_BACKGROUND", "status": "analyzing_background", "message": "배경 영역을 분석하는 중입니다."},
+    "physics":         {"state": "ANALYZING_PHYSICS",    "status": "analyzing_physics",    "message": "움직임의 물리 일관성을 분석하는 중입니다."},
 #     "temporal":  {"state": "ANALYZING_TEMPORAL",  "status": "analyzing_temporal",  "message": "프레임 간 움직임 일관성을 분석하는 중입니다."},
 }
 
@@ -637,6 +733,8 @@ def run_ai_video_analysis(
         video_type = _detect_video_type(video_path, frames)
 
         # ── 4. 분석기 실행 ────────────────────────────────────
+        selected_analyzers = _select_analyzers(targets)
+
         analyzer_arg_map = {
             "clip":      {"frames": frames},
             "frequency": {"frames": frames},
@@ -644,7 +742,19 @@ def run_ai_video_analysis(
 #             "temporal":  {"segments": temporal_segments},
         }
 
-        selected_analyzers = _select_analyzers(targets)
+        # 타겟 영역 분석기용 프레임 준비 (선택됐을 때만 크롭/마스킹 수행)
+        # 얼굴/배경은 원본 해상도 프레임에서 크롭 후 224로 정규화 → 디테일 유지
+        if "clip_face" in selected_analyzers or "clip_background" in selected_analyzers:
+            hires_frames = region.get_hires_frames(video_path)
+        if "clip_face" in selected_analyzers:
+            face_frames = region.crop_face(hires_frames, video_type.get("face_box"))
+            analyzer_arg_map["clip_face"] = {"frames": face_frames}
+        if "clip_background" in selected_analyzers:
+            bg_frames = region.mask_background(hires_frames, video_type.get("face_box"))
+            analyzer_arg_map["clip_background"] = {"frames": bg_frames}
+        if "physics" in selected_analyzers:
+            analyzer_arg_map["physics"] = {"frames": frames}  # 움직임은 전체 프레임
+
         results: dict[str, AnalyzerResult] = {}
         total_analyzers = len(selected_analyzers)
 
@@ -707,6 +817,9 @@ def run_ai_video_analysis(
         result_json["duration"]           = duration  # _validate_video에서 계산한 값 재사용
         result_json["selected_targets"]   = targets or []
         result_json["selected_analyzers"] = selected_analyzers
+        # 탐지 결과(video_type)는 규격의 analysis_details.detected_regions 자리에 넣을 예정.
+        # 항목 스키마가 백엔드와 합의되기 전까지는 노출하지 않는다 (규격 준수).
+        # 합의 후 build_result_json에 detected_regions 인자로 전달.
 
         _emit_progress(progress_callback, "DONE", "done", 100,
                        "분석이 완료되었습니다.", selected_analyzers)
