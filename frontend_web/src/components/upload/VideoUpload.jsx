@@ -42,17 +42,18 @@ export default function VideoUpload({ onSubmit }) {
     const selected = Object.entries(targets)
       .filter(([, v]) => v)
       .map(([k]) => k);
-    if (!selected.length) {
-      setError("분석 타겟을 1개 이상 선택해 주세요");
-      return;
-    }
+
+    // 타겟 미선택 시 전체 타겟으로 자동 폴백
+    const finalTargets = selected.length > 0
+      ? selected
+      : Object.keys(targets); // ["face", "bg", "motion", "voice"]
 
     if (url.trim()) {
       if (!URL_PATTERN.test(url.trim())) {
         setError("YouTube 링크를 입력해 주세요");
         return;
       }
-      onSubmit?.({ type: "url", value: url.trim(), targets: selected });
+      onSubmit?.({ type: "url", value: url.trim(), targets: finalTargets });
       return;
     }
     if (!file) {
@@ -64,7 +65,7 @@ export default function VideoUpload({ onSubmit }) {
     onSubmit?.({
       type: "file",
       value: file,
-      targets: selected,
+      targets: finalTargets,
       onProgress: setProgress,
     });
   }
@@ -149,6 +150,16 @@ export default function VideoUpload({ onSubmit }) {
         targets={targets}
         onToggle={(id) => setTargets((p) => ({ ...p, [id]: !p[id] }))}
       />
+
+      {/* 안내 문구: 타겟 전체 해제 시 */}
+      {Object.values(targets).every((v) => !v) && (
+        <p
+          className="text-fluid-xs mt-fluid-xs"
+          style={{ color: "var(--text-3)" }}
+        >
+          💡 타겟 미선택 시 전체 항목을 분석합니다
+        </p>
+      )}
 
       {error && (
         <p

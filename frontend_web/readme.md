@@ -1,6 +1,6 @@
 # TrueView — AI 영상 판별 서비스
 
-> "이 영상, 진짜일까요?" — 딥페이크·AI 생성 영상을 몇 초 만에 탐지합니다.
+> "이 영상, 진짜일까요?" — AI로 조작된 영상을 몇 초 만에 확인해 드립니다.
 
 ---
 
@@ -15,22 +15,22 @@
 7. [명명 규칙](#명명-규칙)
 8. [API 연동](#api-연동)
 9. [디자인 시스템](#디자인-시스템)
-10. [향후 작업](#향후-작업)
 
 ---
 
 ## 서비스 소개
 
-TrueView는 영상 파일 또는 YouTube URL을 업로드하면 AI가 딥페이크·AI 생성 여부를 자동으로 분석하는 웹 서비스입니다.
+TrueView는 영상 파일 또는 YouTube URL을 업로드하면 AI가 조작 여부를 자동으로 분석하는 웹 서비스입니다.
+5070세대를 주요 타겟으로 하여 기술 용어 없이 누구나 쉽게 결과를 이해할 수 있도록 설계되었습니다.
 
 | 기능 | 설명 |
 |---|---|
 | 영상 업로드 | 드래그앤드롭 또는 파일 선택 (MP4, AVI, MOV / 최대 500MB) |
 | URL 분석 | YouTube 링크 직접 입력 |
-| 분석 타겟 선택 | 얼굴 조작 / 배경 생성 / 움직임 패턴 / 음성 합성 |
-| 분석 중 화면 | 단계별 타임라인 + 진행률 게이지 + 선택 타겟 기준 작업 목록 |
-| 결과 시각화 | AI 생성 확률 게이지, 의심 프레임 타임라인, 분석 상세 테이블 |
-| 의심 구간 클릭 | 타임라인 포인트 클릭 시 해당 프레임 캡처 + 태그 표시 |
+| 확인 항목 선택 | 얼굴 조작 / 배경 생성 / 움직임 패턴 / 음성 합성 |
+| 분석 중 화면 | 단계별 타임라인 + 진행률 게이지 + 작업 목록 |
+| 결과 시각화 | AI 생성 확률 게이지, 텍스트 요약, 레이더 차트, 의심 장면 타임라인 |
+| 의심 장면 클릭 | 타임라인 포인트 클릭 시 해당 프레임 캡처 + 태그 표시 |
 | 분석 기록 | 쿠키 기반 최근 10건 자동 저장 (30일) / 클릭 시 결과 페이지 이동 |
 
 ---
@@ -43,6 +43,7 @@ TrueView는 영상 파일 또는 YouTube URL을 업로드하면 AI가 딥페이�
 | 스타일 | Tailwind CSS v4 + CSS 변수 |
 | 라우팅 | React Router DOM v7 |
 | HTTP | Axios |
+| 차트 | Recharts (레이더 차트) |
 | 상태 관리 | React Hooks (useState, useEffect, useRef) |
 | 저장소 | Cookie (분석 기록) |
 
@@ -55,11 +56,10 @@ src/
 ├── api/
 │   ├── axios.js               # Axios 인스턴스 + 인터셉터
 │   ├── analyzeService.js      # API 서비스 (MOCK_MODE 전환)
-│   └── mock.js                # 목업 데이터 (danger / warn / safe 3가지 시나리오)
+│   └── mock.js                # 목업 데이터 (danger / warning / safe 3가지 시나리오)
 │
 ├── components/
 │   ├── common/
-│   │   ├── Loading.jsx        # 로딩 스피너
 │   │   ├── ErrorMessage.jsx   # 에러 메시지
 │   │   └── index.js
 │   ├── layout/
@@ -69,15 +69,14 @@ src/
 │   ├── upload/
 │   │   ├── VideoUpload.jsx    # 업로드 카드 (조립)
 │   │   ├── DropZone.jsx       # 드래그앤드롭 영역
-│   │   ├── TargetSelector.jsx # 분석 타겟 체크박스
+│   │   ├── TargetSelector.jsx # 확인 항목 체크박스
 │   │   └── index.js
 │   ├── result/
 │   │   ├── AnalyzingScreen.jsx  # 분석 중 화면 (단계 + 진행률 + 작업 목록)
-│   │   ├── VerdictBanner.jsx    # 판정 결과 배너
+│   │   ├── VerdictBanner.jsx    # 판정 결과 배너 + 요약 문구
 │   │   ├── ConfidenceGauge.jsx  # AI 생성 확률 게이지
-│   │   ├── AnalysisTimeline.jsx # 의심 구간 타임라인
-│   │   ├── AnalysisTable.jsx    # 분석기별 상세 테이블
-│   │   ├── ShareCard.jsx        # 결과 공유 + 피드백
+│   │   ├── AnalysisTimeline.jsx # 의심 장면 타임라인
+│   │   ├── AnalysisChart.jsx    # 항목별 레이더 차트 + 상세 표
 │   │   └── index.js
 │   └── history/
 │       ├── AnalysisHistory.jsx  # 분석 기록 목록
@@ -85,11 +84,10 @@ src/
 │       └── index.js
 │
 ├── constants/
-│   ├── targets.js   # TARGET_LIST, ALLOWED_EXT, URL_PATTERN 등
-│   └── verdict.js   # VERDICT_CONFIG, getVerdict(), getScoreColor(), ANALYSIS_STEPS
+│   ├── targets.js   # TARGET_LIST, DEFAULT_TARGETS, ALLOWED_EXT, URL_PATTERN 등
+│   └── verdict.js   # VERDICT_CONFIG, getVerdict(), getScoreColor()
 │
 ├── hooks/
-│   ├── useFetch.js            # 범용 데이터 페칭 훅
 │   ├── usePollResult.js       # 분석 결과 폴링 (최소 표시 시간 보장)
 │   └── useAnalysisHistory.js  # 쿠키 기록 상태 관리
 │
@@ -169,13 +167,13 @@ VITE_API_URL=http://127.0.0.1:8000
 `src/api/mock.js` 상단의 `MOCK_SCENARIO` 값으로 시나리오 전환.
 
 ```js
-export const MOCK_SCENARIO = "danger"; // "warn" | "safe"
+export const MOCK_SCENARIO = "danger"; // "danger" | "warning" | "safe"
 ```
 
 | 값 | 결과 | 확률 |
 |---|---|---|
 | `"danger"` | 🔴 AI 의심 | 91% |
-| `"warn"` | 🟡 주의 | 55% |
+| `"warning"` | 🟡 주의 | 55% |
 | `"safe"` | 🟢 정상 | 12% |
 
 ---
@@ -214,34 +212,53 @@ export const MOCK_SCENARIO = "danger"; // "warn" | "safe"
     "status": "success",
     "is_ai": true,
     "confidence": 0.91,
+    "summary": "AI 생성 영상으로 판별되었습니다.",
     "duration": 32,
+    "module_scores": {
+      "clip": 0.87,
+      "frequency": 0.73,
+      "metadata": 0.5,
+      "physics": 0.62
+    },
+    "details": [
+      {
+        "module": "clip",
+        "module_name": "프레임 유사도",
+        "score": 0.87,
+        "status": "ok",
+        "reason": "CLIP(fallback): 프레임 간 평균 유사도 0.123"
+      }
+    ],
     "analysis_details": {
-      "details": "AI 생성 영상으로 판별되었습니다.",
-      "analyzer_scores": [
-        { "key": "face", "label": "얼굴 조작", "score": 0.87, "tags": ["얼굴 경계 왜곡"] }
-      ],
+      "details": "AI 생성 영상으로 판별되었습니다. 근거: ...",
       "detected_regions": []
     },
     "evidence_frames": [
-      { "timestamp": 3.2, "file_name": "frame_3.2.jpg", "probability": 0.94, "tags": [] }
+      {
+        "timestamp": 3.2,
+        "file_name": "frame_3_2.jpg",
+        "probability": 0.94,
+        "tags": []
+      }
     ]
   }
 }
 ```
 
-### 이미지 URL 조합 방식
+### 분석 타겟
 
-`evidence_frames[].file_name` 기준으로 프론트에서 URL을 조합합니다.
+확인 항목 선택 시 백엔드에 `targets` 배열로 전달됩니다.
+현재 백엔드는 기본 분석기(clip·frequency·metadata) 항상 전체 실행 + motion 선택 시 physics 추가 실행.
+
+```js
+targets: ["face", "bg", "motion", "voice"]
+```
+
+### 이미지 URL 조합 방식
 
 ```
 http://127.0.0.1:8000/storage/results/{task_id}/{file_name}
 ```
-
-> 백엔드에 정적 파일 서빙(`/storage` 마운트) 필요 — 백엔드 명세서 참고
-
-### 분석 타겟 (백엔드 연동 예정)
-
-`src/api/analyzeService.js` TODO 주석 해제 시 즉시 연동됩니다.
 
 ---
 
@@ -260,6 +277,20 @@ http://127.0.0.1:8000/storage/results/{task_id}/{file_name}
 | `--text-2` | `#78716C` | 보조 |
 | `--text-3` | `#A8A29E` | 힌트 |
 
+### 폰트 사이즈
+
+5070세대 가독성을 위해 전체 폰트 사이즈를 확대했습니다.
+
+| 변수 | 범위 |
+|---|---|
+| `--fs-xs` | 14px ~ 16px |
+| `--fs-sm` | 16px ~ 18px |
+| `--fs-base` | 17px ~ 20px |
+| `--fs-md` | 19px ~ 22px |
+| `--fs-lg` | 22px ~ 28px |
+| `--fs-xl` | 28px ~ 38px |
+| `--fs-2xl` | 36px ~ 50px |
+
 ### 컴포넌트 클래스
 
 ```css
@@ -273,14 +304,6 @@ http://127.0.0.1:8000/storage/results/{task_id}/{file_name}
 
 ---
 
-## 향후 작업
-
-- [ ] 분석 타겟 백엔드 연동 (`analyzeService.js` TODO 주석 해제)
-- [ ] 백엔드 정적 파일 서빙 추가 (의심 프레임 이미지 표시)
-
-
----
-
 ## 라이선스
 
-© 2025 TrueView. Capstone Design Project.
+© 2026 TrueView. Capstone Design Project.

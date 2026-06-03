@@ -3,7 +3,9 @@ export default function ConfidenceGauge({ probability, cfg }) {
   return (
     <div className="card mb-fluid-sm">
       <div className="flex justify-between items-baseline mb-fluid-xs">
-        <span className="text-fluid-base" style={{ color: "var(--text-2)" }}>AI 생성 확률</span>
+        <span className="text-fluid-base" style={{ color: "var(--text-2)" }}>
+          AI가 만든 영상일 가능성
+        </span>
         <span className="font-bold" style={{ fontSize: "clamp(28px,2.5vw,38px)", color: cfg.bar }}>
           {probability}%
         </span>

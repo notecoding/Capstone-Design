@@ -11,13 +11,14 @@
   --text-2:       #78716C;
   --text-3:       #A8A29E;
 
-  --fs-xs:   clamp(12px, 0.85vw, 14px);
-  --fs-sm:   clamp(13px, 1.0vw,  15px);
-  --fs-base: clamp(15px, 1.2vw,  17px);
-  --fs-md:   clamp(16px, 1.4vw,  19px);
-  --fs-lg:   clamp(19px, 1.8vw,  24px);
-  --fs-xl:   clamp(26px, 2.2vw,  34px);
-  --fs-2xl:  clamp(32px, 3.0vw,  44px);
+  /* 5070세대 가독성을 위해 전체 폰트 사이즈 확대 */
+  --fs-xs:   clamp(14px, 1.0vw,  16px);
+  --fs-sm:   clamp(16px, 1.2vw,  18px);
+  --fs-base: clamp(17px, 1.4vw,  20px);
+  --fs-md:   clamp(19px, 1.6vw,  22px);
+  --fs-lg:   clamp(22px, 2.0vw,  28px);
+  --fs-xl:   clamp(28px, 2.6vw,  38px);
+  --fs-2xl:  clamp(36px, 3.4vw,  50px);
 
   --sp-xs:  clamp(6px,  0.5vw,  9px);
   --sp-sm:  clamp(10px, 0.9vw, 15px);

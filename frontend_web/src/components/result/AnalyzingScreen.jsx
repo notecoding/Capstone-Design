@@ -2,14 +2,11 @@
 import { useState, useEffect } from "react";
 
 // ── 분석 작업 목록 ───────────────────────────────────────────────
-// [현재] 사용자에게 보이는 이름(얼굴 조작 등)을 그대로 유지.
-//        백엔드는 실제로 clip·frequency·metadata·temporal을 실행하지만
-//        UI는 사용자가 선택한 타겟 이름으로 표시.
+// 백엔드 실행 순서: 프레임 추출 → clip → frequency → metadata → (motion 선택 시 physics 추가)
+// 사용자에게는 타겟 선택 이름으로 표시.
+// face·background·voice 타겟은 region 탐지만 수행하고 고유 분석기는 미구현 상태.
 //
-// [TODO] 백엔드 targets 연동 완료 후 아래 작업 필요:
-//        1. worker.py → inference.py에 targets 실제 전달
-//        2. key 값을 백엔드 모듈명(clip·frequency·metadata·temporal)으로 변경
-//        3. targets.js id도 동일하게 통일
+// ※ ALL_TASKS는 프레임 추출(extract) 1개 + 분석 모듈 4개 = 총 5개 항목
 const ALL_TASKS = [
   { id: "extract", key: null,     name: "프레임 추출",      sub: "영상에서 핵심 프레임 선별" },
   { id: "face",    key: "face",   name: "얼굴 조작 탐지",   sub: "딥페이크 패턴 분석" },
@@ -18,25 +15,21 @@ const ALL_TASKS = [
   { id: "voice",   key: "voice",  name: "음성·메타데이터",  sub: "합성 음성 및 파일 정보 분석" },
 ];
 
-const STEP_DELAY_MS = 600; // 작업 1개당 체크 간격
+const STEP_DELAY_MS = 600;
 
 function filterTasks(targets) {
-  // [현재] 백엔드가 항상 4개 모듈 전부 실행하므로 targets 무관하게 전체 표시
-  // [TODO] 백엔드 targets 연동 완료 후 아래 주석 해제하고 위 return 제거
-  //        연동 조건: worker.py → inference.py에 targets 전달,
-  //                  targets.js id를 clip·frequency·metadata·temporal로 변경
+  // 백엔드가 항상 기본 분석기(clip·frequency·metadata) 전체를 실행하므로 targets 무관하게 전체 표시.
+  // 추후 타겟별 고유 분석기가 추가되면 아래 주석을 해제하고 위 return을 제거.
   return ALL_TASKS;
   // return ALL_TASKS.filter(t => t.key === null || targets.includes(t.key));
 }
 
-// taskStatus + completedCount 로 각 작업 상태 결정
 function getTaskStatus(idx, taskStatus, completedCount) {
   if (taskStatus === "completing" || taskStatus === "completed") {
     if (idx < completedCount) return "done";
     if (idx === completedCount) return "active";
     return "wait";
   }
-  // 일반 processing
   const doneCount = taskStatus === "pending" ? 0 : 1;
   if (idx < doneCount)   return "done";
   if (idx === doneCount) return "active";
@@ -70,10 +63,8 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
   const [pct, setPct]               = useState(0);
   const [completedCount, setCount]  = useState(0);
 
-  // 진행률 바 — processing 중 서서히 증가
   useEffect(() => {
     if (taskStatus === "completing") {
-      // completing 상태: 작업 체크 완료에 맞춰 100%까지
       const target = 100;
       const total  = tasks.length * STEP_DELAY_MS;
       const step   = (target - pct) / (total / 80);
@@ -95,7 +86,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
     return () => clearInterval(id);
   }, [taskStatus]);
 
-  // completing 상태: 작업 목록 순서대로 체크
   useEffect(() => {
     if (taskStatus !== "completing") return;
     setCount(0);
@@ -105,7 +95,7 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
     return () => timers.forEach(clearTimeout);
   }, [taskStatus]);
 
-  const displayPct = Math.round(pct);
+  const displayPct   = Math.round(pct);
   const isCompleting = taskStatus === "completing";
 
   return (
@@ -117,7 +107,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
 
       <div className="card text-center" style={{ padding: "var(--sp-xl) var(--sp-lg)" }}>
 
-        {/* 아이콘 */}
         <div className="mx-auto mb-fluid-md flex items-center justify-center"
              style={{ width: 72, height: 72, borderRadius: 20,
                       background: "var(--brand-light)", border: "1.5px solid var(--border)" }}>
@@ -130,7 +119,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
           </svg>
         </div>
 
-        {/* 제목 */}
         <p className="text-fluid-lg font-bold mb-fluid-xs"
            style={{ color: "var(--text-1)", letterSpacing: "-0.3px" }}>
           {isCompleting ? "분석 완료 중..." : "영상 분석 중입니다"}
@@ -141,7 +129,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
             : (message || "AI가 영상을 꼼꼼히 살펴보고 있어요. 잠시만 기다려 주세요.")}
         </p>
 
-        {/* 3단계 스텝 */}
         <div className="flex items-center justify-center mb-fluid-lg">
           {["업로드", "분석 중", "결과 생성"].map((label, i) => {
             const isDone   = isCompleting ? i <= 1 : i < stepIdx;
@@ -191,7 +178,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
           })}
         </div>
 
-        {/* 진행률 바 */}
         <div className="mb-fluid-lg" style={{ textAlign: "left" }}>
           <div className="flex justify-between items-baseline mb-fluid-xs">
             <span className="text-fluid-xs font-semibold"
@@ -208,7 +194,6 @@ export default function AnalyzingScreen({ taskStatus = "pending", message, targe
           </div>
         </div>
 
-        {/* 작업 목록 */}
         <div className="flex flex-col gap-fluid-xs" style={{ textAlign: "left" }}>
           {tasks.map((task, idx) => {
             const ts = getTaskStatus(idx, taskStatus, completedCount);

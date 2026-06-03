@@ -1,12 +1,20 @@
 // src/components/upload/TargetSelector.jsx
 import { TARGET_LIST } from "../../constants/targets";
 
+// 타겟별 쉬운 설명
+const EASY_DESC = {
+  face:   "얼굴이 인공적으로 바뀌었는지",
+  bg:     "배경이 AI로 만들어졌는지",
+  motion: "움직임이 자연스러운지",
+  voice:  "목소리가 AI로 만들어졌는지",
+};
+
 export default function TargetSelector({ targets, onToggle }) {
   return (
     <div>
-      <span className="sec-label">분석 타겟 선택</span>
+      <span className="sec-label">확인할 항목 선택</span>
       <div className="grid grid-cols-2 gap-fluid-sm">
-        {TARGET_LIST.map(({ id, label, sub }) => (
+        {TARGET_LIST.map(({ id, label }) => (
           <div key={id} onClick={() => onToggle(id)}
                className="flex items-center gap-fluid-sm p-fluid-sm cursor-pointer transition-all"
                style={{
@@ -29,7 +37,7 @@ export default function TargetSelector({ targets, onToggle }) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-fluid-sm font-semibold" style={{ color: "var(--text-1)" }}>{label}</p>
-              <p className="text-fluid-xs mt-0.5"        style={{ color: "var(--text-3)" }}>{sub}</p>
+              <p className="text-fluid-xs mt-0.5"        style={{ color: "var(--text-3)" }}>{EASY_DESC[id]}</p>
             </div>
           </div>
         ))}
