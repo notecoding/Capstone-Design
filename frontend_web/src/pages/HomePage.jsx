@@ -7,13 +7,13 @@ import { AnalysisHistory } from "../components/history";
 const STATS = [
   { value: "98.2%", label: "탐지 정확도" },
   { value: "12초",  label: "평균 분석 시간" },
-  { value: "4종",   label: "탐지 모델" },
+  { value: "4가지", label: "분석 방법" },
 ];
 
 const HOW_TO = [
   { step: "01", title: "영상 업로드",  desc: "파일을 끌어다 놓거나\nYouTube 링크를 붙여넣으세요" },
-  { step: "02", title: "AI 자동 분석", desc: "얼굴·배경·음성을\n자동으로 검사합니다" },
-  { step: "03", title: "결과 확인",    desc: "AI 생성 확률과\n의심 구간을 알려드립니다" },
+  { step: "02", title: "자동 분석",    desc: "얼굴·배경·음성을\n자동으로 검사합니다" },
+  { step: "03", title: "결과 확인",    desc: "AI로 만든 영상인지\n쉽게 알려드립니다" },
 ];
 
 export default function HomePage() {
@@ -30,7 +30,7 @@ export default function HomePage() {
         state: { name: payload.type === "file" ? payload.value.name : payload.value, targets: payload.targets },
       });
     } catch (err) {
-      payload.onProgress?.(null);  // 오류 시 진행률 바 숨김
+      payload.onProgress?.(null);
       setError(err.response?.data?.detail || "업로드 중 오류가 발생했습니다.");
     }
   }
@@ -40,7 +40,6 @@ export default function HomePage() {
 
       {/* 히어로 */}
       <section className="text-center pt-fluid-xl pb-fluid-lg">
-       
         <h1 className="mt-fluid-lg text-fluid-2xl font-bold leading-tight mb-fluid-sm"
             style={{ color: "var(--text-1)", letterSpacing: "-0.5px" }}>
           이 영상,{" "}
@@ -48,7 +47,7 @@ export default function HomePage() {
         </h1>
 
         <p className="text-fluid-base leading-relaxed mb-fluid-lg" style={{ color: "var(--text-2)" }}>
-          딥페이크·AI 생성 영상을 몇 초 만에 탐지합니다.<br />
+          AI로 조작된 영상을 몇 초 만에 확인해 드립니다.<br />
           파일을 올리거나 유튜브 링크를 붙여넣으세요.
         </p>
 

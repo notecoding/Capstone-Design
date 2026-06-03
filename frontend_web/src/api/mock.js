@@ -1,5 +1,4 @@
-// src/api/mock.js
-export const MOCK_SCENARIO = "danger"; // "warn" | "safe"
+export const MOCK_SCENARIO = "danger"; // "danger" | "warning" | "safe"
 
 const FRAME_IMGS = [
   "https://picsum.photos/seed/frame1/640/360",
@@ -28,12 +27,12 @@ const SCENARIOS = {
           { key: "metadata", label: "메타데이터",  score: 0.25, tags: ["정상 인코더", "C2PA 없음"] },
         ],
         detected_regions: [
-          { issue: "얼굴 경계 왜곡",     x: 120, y: 80,  width: 200, height: 220 },
-          { issue: "눈 깜빡임 패턴 이상", x: 145, y: 110, width: 80,  height: 40  },
-          { issue: "피부 텍스처 불일치",  x: 130, y: 150, width: 160, height: 120 },
+          { issue: "얼굴 경계 왜곡",      x: 120, y: 80,  width: 200, height: 220 },
+          { issue: "눈 깜빡임 패턴 이상",  x: 145, y: 110, width: 80,  height: 40  },
+          { issue: "피부 텍스처 불일치",   x: 130, y: 150, width: 160, height: 120 },
         ],
       },
-      duration: 32,  // 영상 총 길이(초) — 타임라인 포인트 위치 계산용
+      duration: 32,
       evidence_frames: [
         {
           timestamp:   3.2,
@@ -57,8 +56,9 @@ const SCENARIOS = {
     },
   },
 
-  warn: {
-    task_id: "mock-task-warn",
+  // 키를 "warn" → "warning" 으로 통일 (history.js / verdict.js / VERDICT_CONFIG 와 일치)
+  warning: {
+    task_id: "mock-task-warning",
     status:  "completed",
     result: {
       status:     "success",
@@ -77,7 +77,7 @@ const SCENARIOS = {
         ],
         detected_regions: [
           { issue: "배경 텍스처 반복 패턴", x: 0,   y: 200, width: 640, height: 160 },
-          { issue: "조명 방향 불일치",       x: 200, y: 50,  width: 120, height: 100 },
+          { issue: "조명 방향 불일치",      x: 200, y: 50,  width: 120, height: 100 },
         ],
       },
       duration: 45,
@@ -128,12 +128,13 @@ function mockUploadProgress(onProgress) {
 export const mockAnalyzeService = {
   _callCount: 0,
 
-  uploadFile: async (file, onProgress) => {
+  // targets 파라미터 추가 — realAnalyzeService 시그니처와 통일
+  uploadFile: async (file, targets, onProgress) => {
     await mockUploadProgress(onProgress);
     return { task_id: SCENARIOS[MOCK_SCENARIO].task_id, status: "processing" };
   },
 
-  analyzeUrl: async (_url) => {
+  analyzeUrl: async (_url, _targets) => {
     await new Promise((r) => setTimeout(r, 500));
     return { task_id: SCENARIOS[MOCK_SCENARIO].task_id, status: "processing" };
   },

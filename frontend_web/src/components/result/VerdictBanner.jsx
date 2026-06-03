@@ -1,5 +1,5 @@
 // src/components/result/VerdictBanner.jsx
-export default function VerdictBanner({ cfg }) {
+export default function VerdictBanner({ cfg, summary }) {
   return (
     <div className="flex items-center gap-fluid-md p-fluid-md mb-fluid-sm"
          style={{ background: cfg.bg, border: `1.5px solid ${cfg.border}`, borderRadius: "var(--r-lg)" }}>
@@ -13,6 +13,11 @@ export default function VerdictBanner({ cfg }) {
       </div>
       <div>
         <p className="text-fluid-md font-bold" style={{ color: cfg.text }}>{cfg.label}</p>
+        {summary && (
+          <p className="text-fluid-sm mt-1 font-medium" style={{ color: cfg.text }}>
+            {summary}
+          </p>
+        )}
         <p className="text-fluid-xs mt-1" style={{ color: cfg.text, opacity: 0.7 }}>
           AI가 분석한 결과입니다. 참고 자료로만 활용하세요.
         </p>

@@ -50,7 +50,7 @@ export default function AnalysisTimeline({ frames, duration, taskId }) {
 
   return (
     <div className="card mb-fluid-sm">
-      <span className="sec-label">분석 타임라인 — 의심 구간 클릭</span>
+      <span className="sec-label">의심스러운 장면 — 클릭해서 확인하세요</span>
 
       <div className="relative mb-1" style={{ height: 24 }}>
         <div className="absolute" style={{
