@@ -143,10 +143,15 @@ def _load_classifier():
     global _classifier
     if _classifier is not None:
         return
-
-    checkpoint_path = "ai_engine/checkpoints/checkpoint_main.pth"
+    
+    checkpoint_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "checkpoints", "checkpoint_main.pth"
+    )
     if not os.path.exists(checkpoint_path):
+        print(f"[WARN] DeCoF 체크포인트 없음 → fallback 모드: {checkpoint_path}")
         return
+
 
     _classifier = _DeCoFClassifier(feat_dim=768, n_frames=8)
     _classifier.load_state_dict(
