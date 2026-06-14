@@ -29,9 +29,9 @@ ANALYZERS = [
 # 임계값 검증(validate_thresholds.py) 후 수치 조정 권장.
 ANALYZER_WEIGHTS = {
     # 기본 분석기
-    "clip":      0.60,   # DeCoF Transformer (핵심 — 2라운드 학습 완료)
-    "frequency": 0.25,   # FFT 주파수 분석 심화
-    "metadata":  0.15,   # 메타데이터 분석 (보조)
+    "clip":      0.90,   # DeCoF Transformer (핵심 — 2라운드 학습 완료)
+    "frequency": 0.00,   # FFT 주파수 분석 심화
+    "metadata":  0.10,   # 메타데이터 분석 (보조)
     "temporal":  0.00,   # 시공간 분석 (보류 — Phase C에서 교체 예정)
 
     # 타겟 영역 분석기 (임시: DeCoF를 영역 크롭에 적용)
