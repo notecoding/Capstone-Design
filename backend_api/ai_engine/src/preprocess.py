@@ -24,26 +24,17 @@ from ai_engine.src.config import VIDEO_CONFIG, TEMPORAL_CONFIG
 
 def extract_frames(video_path: str) -> tuple[list[np.ndarray], list[float]]:
     """
-    CLIP / FFT 분석용 균등 간격 프레임 추출.
+    CLIP / FFT 분석용 프레임 추출 (DeCoF 학습 형식에 맞춤).
 
-    동작 방식:
-      영상 전체 길이를 N등분해서 각 위치의 프레임을 하나씩 뽑습니다.
-      예: 100프레임 영상에서 8개 추출 → 0, 14, 28, 42, 56, 70, 84, 98번 프레임
+    [v2 → v3 변경: 학습-추론 전처리 불일치 수정]
+      문제: 기존 방식은 학습 데이터(DeCoF)와 두 가지가 어긋났음.
+        1. "첫 32프레임 인덱스" 기준 추출 → fps에 따라 보는 시간 구간이 달라짐.
+           3fps 학습영상은 32프레임이 ≈10초인데, 60fps 입력은 ≈0.5초.
+           DeCoF는 프레임 간 시간적 변화를 보는 모델이라 이 차이가 치명적.
+        2. cv2.resize로 통짜 리사이즈 → 종횡비 무시하고 찌그러뜨림.
+           학습은 "중앙 정사각형 크롭"이었음.
 
-    이렇게 하는 이유:
-      CLIP은 개별 프레임의 특징을 보는 모델입니다.
-      영상 전체를 고르게 대표하는 프레임들이 필요하므로 균등 추출을 씁니다.
-      연속 프레임을 쓰면 한 장면만 과대 대표될 수 있습니다.
-
-    Args:
-        video_path: 분석할 영상 파일 경로
-
-    Returns:
-        frames    : BGR numpy 배열 리스트. shape: (H, W, 3)
-        timestamps: 각 프레임의 초단위 타임스탬프 (증거 프레임 저장 시 사용)
-
-    Raises:
-        ValueError: 영상을 열 수 없거나 프레임이 없을 때
+      수정: 시간 기반 균등 추출 + 중앙 정사각형 크롭으로 학습 형식에 정렬.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -56,19 +47,37 @@ def extract_frames(video_path: str) -> tuple[list[np.ndarray], list[float]]:
         cap.release()
         raise ValueError("유효한 프레임이 없습니다.")
 
-    # max_frames와 실제 프레임 수 중 작은 것으로 추출 개수 결정
-    n       = min(VIDEO_CONFIG["max_frames"], total_frames)
-    # DeCoF 방식: 처음 32프레임에서 균등 추출
-    decof_max = min(31, total_frames - 1)
-    indices = np.linspace(0, decof_max, n, dtype=int).tolist()
+    n = min(VIDEO_CONFIG["max_frames"], total_frames)
+
+    # ── [수정 1] 시간 기반 균등 추출 ──────────────────────────────
+    # DeCoF 학습 영상(3fps, 첫 32프레임 ≈ 10초)에 맞춰
+    # "앞 10초 구간"을 fps와 무관하게 시간 균등으로 샘플링한다.
+    # fps가 60이든 3이든 같은 시간 간격을 보게 되어 학습 분포와 일치.
+    sample_span_sec = VIDEO_CONFIG.get("sample_span_sec", 10.0)
+    span_frames = min(int(sample_span_sec * fps), total_frames - 1)
+    # 영상이 10초보다 짧으면 전체를 균등 분할
+    if span_frames < n - 1:
+        span_frames = total_frames - 1
+    indices = np.linspace(0, span_frames, n, dtype=int).tolist()
 
     frames, timestamps = [], []
+    target_size = VIDEO_CONFIG["frame_size"]
+
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if ret:
-            # 모든 프레임을 동일 크기로 정규화 (모델 입력 규격 맞춤)
-            resized = cv2.resize(frame, VIDEO_CONFIG["frame_size"])
+            # ── [수정 2] 중앙 정사각형 크롭 후 리사이즈 ──────────────
+            # 학습 데이터와 동일하게 종횡비를 유지한 채 중앙을 정사각형으로 자른다.
+            # 세로(9:16) 영상을 통짜 resize하면 가로가 찌그러져 학습 때
+            # 본 적 없는 왜곡 화면이 되므로, center crop으로 방지.
+            h, w = frame.shape[:2]
+            side = min(h, w)
+            top  = (h - side) // 2
+            left = (w - side) // 2
+            cropped = frame[top:top + side, left:left + side]
+            resized = cv2.resize(cropped, target_size)
+
             frames.append(resized)
             timestamps.append(round(idx / fps, 2))
 
